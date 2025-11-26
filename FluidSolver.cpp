@@ -14,6 +14,7 @@ FluidSolver::FluidSolver() {
 
     initialize_smoke_field();
     initialize_temperature_field();
+    initialize_environment();
 
 	construct_vel_center();
 
@@ -21,6 +22,7 @@ FluidSolver::FluidSolver() {
 }
 
 void FluidSolver::solve_smoke() {
+    update_scene(VisualizeField::Smoke);
     add_smoke_inflow();
     add_temperature_inflow();
     //determine_time_step();
@@ -32,6 +34,70 @@ void FluidSolver::solve_smoke() {
     
     construct_vel_center();
     set_velocity_bytes();
+}
+
+void FluidSolver::update_scene(VisualizeField field_type=VisualizeField::Smoke) {
+    /*
+    fill the scene bytes array with the values to show
+    */
+    scene_bytes = {};
+
+    for (int i = resY - 1; i >= 0; i--) {
+        for (int j = 0; j < RESX; j++) {
+            //set obstacles
+            if (solid_map[i+1][j+1]) {
+                unsigned char cr = static_cast<unsigned char>(0.0f);
+                unsigned char cg = static_cast<unsigned char>(0.0f);
+                unsigned char cb = static_cast<unsigned char>(255.0f);
+
+                scene_bytes.push_back(cr);
+                scene_bytes.push_back(cg);
+                scene_bytes.push_back(cb);
+            }
+            else
+            {
+               //set the value to show
+                float value = 0.0;
+                unsigned char cr; unsigned char cb; unsigned char cg;
+                float r; float g; float b;
+                switch (field_type)
+                {
+                case VisualizeField::Smoke:
+                    value = smoke[i][j] / 1.0; // maxAbsX;
+                    value = std::min(1.0f, value);
+                    cr = static_cast<unsigned char>(value * 255.0f);
+                    cg = static_cast<unsigned char>(value * 255.0f);
+                    cb = static_cast<unsigned char>(value * 255.0f);
+                    break;
+                case VisualizeField::Temperature:
+                    value = temperature[i][j] / T_incoming; // maxAbsX;
+                    value = std::min(T_incoming, value);
+                    cr = static_cast<unsigned char>(value * 255.0f);
+                    cg = static_cast<unsigned char>(0.0f);
+                    cb = static_cast<unsigned char>(0.0f);
+                    break;
+                case VisualizeField::Pressure:
+                    blue_red_color_map(pressure[i][j], 20.0, r, g, b);
+                    cr = static_cast<unsigned char>(r * 255.0f);
+                    cg = static_cast<unsigned char>(g * 255.0f);
+                    cb = static_cast<unsigned char>(b * 255.0f);
+                    break;
+                case VisualizeField::Divergence:
+                    blue_red_color_map(divergence[i][j], 1.0, r, g, b);
+                    cr = static_cast<unsigned char>(r * 255.0f);
+                    cg = static_cast<unsigned char>(g * 255.0f);
+                    cb = static_cast<unsigned char>(b * 255.0f);
+                    break;
+                default:
+                    break;
+                }
+
+                scene_bytes.push_back(cr);
+                scene_bytes.push_back(cg);
+                scene_bytes.push_back(cb);
+            }
+        }
+    }
 }
 
 void FluidSolver::solve() {
@@ -128,10 +194,6 @@ void FluidSolver::advect_quantity(float arr[RESY][RESX]) {
 
             //Semi lagrangian advection
             Vec2 prev_pos = Vec2(static_cast<float>(j), static_cast<float>(i)) - dt * dir;
-
-            /*if (i == RESY - 5 && j == RESX / 2 - 10) {
-                std::cout << "i, j" << Vec2(i, j) << " prev pos " << prev_pos << " val " << arr[i][j] << " vel " << Vec2(vx, vy) << std::endl;
-            }*/
             arr[i][j] = sample_quantity(arr, prev_pos);
         }
     }
@@ -144,17 +206,17 @@ void FluidSolver::smoke_add_external_force() {
     for (int i = 0; i < RESY+1; i++) {
         for (int j = 0; j < RESX; j++) {
             //add gravity and bouyouncy
-            float bouyouncy_force = -density * sample_quantity(smoke, Vec2(j, i - 0.5)) + bouyancy * (sample_quantity(temperature, Vec2(j, i-0.5)) - T_amb);
+            float bouyouncy_force = -density_alpha * sample_quantity(smoke, Vec2(j, i - 0.5)) + bouyancy * (sample_quantity(temperature, Vec2(j, i-0.5)) - T_amb);
             float g_force = -gravity;
-            velY[i][j] += dt * (bouyouncy_force);
+            velY[i][j] += dt * (bouyouncy_force+gravity);
         }
     }
 }
 
 void FluidSolver::project() {
-    compute_divergence();
     gauss_seidel_pressure_solve();
     update_incompressible_velocity();
+    compute_divergence();
     compute_divergence_field();
 }
 
@@ -184,16 +246,21 @@ void FluidSolver::gauss_seidel_pressure_solve() {
     for (int n = 0; n < gauss_seidel_iterations; n++) {
         for (int i = 0; i < RESY; i++) {
             for (int j = 0; j < RESX; j++) {
-                int st = (i == 0); int sr = (j == RESX - 1); int sb = (i == RESY - 1); int sl = (j == 0);
+                //continue if a solid cell
+                if (solid_map[i + 1][j + 1]) continue;
+
+                //solve pressure
+                int st = solid_map[i][j+1]; int sb = solid_map[i + 2][j+1]; int sl = solid_map[i + 1][j]; int sr = solid_map[i + 1][j + 2];
+                int at = air_map[i][j + 1]; int ab = air_map[i + 2][j + 1]; int al = air_map[i + 1][j]; int ar = air_map[i + 1][j + 2];
                 int sum_occ = st + sr + sb + sl;
                 int free_neigh = 4 - sum_occ;
-                //set occupancy coefficient, if outside of the grid, we apply drichlet condition, p = 0
-                float pt = st ? 0.0 : pressure[i - 1][j];
-                float pr = sr ? 0.0 : pressure[i][j + 1];
-                float pb = sb ? 0.0 : pressure[i + 1][j];
-                float pl = sl ? 0.0 : pressure[i][j - 1];
+                //the pressure is 0 if solid or air cell
+                float pt = st||at ? 0.0 : pressure[i - 1][j];
+                float pr = sr||ar ? 0.0 : pressure[i][j + 1];
+                float pb = sb||ab ? 0.0 : pressure[i + 1][j];
+                float pl = sl||al ? 0.0 : pressure[i][j - 1];
 
-                float pressure_part = ((!sr)*pr + (!sl)*pl + (!st)*pt + (!sb)*pb);
+                float pressure_part = (pr + pl + pt + pb);
                 float div_part = -density * dx * (((!sr)*velX[i][j + 1] - (!sl)*velX[i][j]) + ((!st)*velY[i][j] - (!sb)*velY[i + 1][j])) / dt;
                 //overrelaxation
                 float pressure_new = (pressure_part + div_part) / free_neigh;
@@ -208,15 +275,31 @@ void FluidSolver::update_incompressible_velocity() {
     //update velX
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX+1; j ++) {
+            //continue if a solid cell
+            if (solid_map[i + 1][j + 1]) continue;
+
+            //get solid and air cells
+            int sl = solid_map[i + 1][j]; int sr = solid_map[i + 1][j + 1];
+            int al = air_map[i + 1][j]; int ar = air_map[i + 1][j + 1];
+
             float pressure_gradx;
-            //Neumann condition for outside of domain, give the pressure value that make the velocity 0
-            if (j == 0) {
+            //solid boundary condition, find the pressure that makes the velocity 0
+            if (sl) {
                 float pl = pressure[i][j] + (density * dx / dt) * (0.0-velX[i][j]);
                 pressure_gradx = (pressure[i][j] - pl) / dx;
             }
-            else if (j == RESX) {
+            else if (sr) {
                 float pr = pressure[i][j-1] + (density * dx / dt) * (velX[i][j] - 0.0);
                 pressure_gradx = (pr-pressure[i][j - 1])/dx;
+            }
+            //air boundary condition, the pressure is 0 set the j=-1 or j=RESX to 0 if it is not solid to avoid error
+            else if(al || j == 0)
+            {
+                pressure_gradx = (pressure[i][j] - 0.0) / dx;
+            }
+            else if (ar || j == RESX)
+            {
+                pressure_gradx = (0.0 - pressure[i][j - 1]) / dx;
             }
             else
             {
@@ -229,15 +312,28 @@ void FluidSolver::update_incompressible_velocity() {
     //update velY
     for (int i = 0; i < RESY+1; i++) {
         for (int j = 0; j < RESX; j++) {
+            //get solid and air cells
+            int st = solid_map[i][j + 1]; int sb = solid_map[i + 1][j + 1];
+            int at = air_map[i][j + 1]; int ab = air_map[i + 1][j + 1];
+
+            //solid boundary condition, find the pressure that makes the velocity 0
             float pressure_grady;
-            //Neumann condition for outside of domain, give the pressure value that make the velocity 0
-            if (i == 0) {
+            if (st) {
                 float pt = pressure[i][j] + (density * dx / dt) * (velY[i][j] - 0.0);
                 pressure_grady = (pt - pressure[i][j]) / dx;
             }
-            else if (i == RESY) {
+            else if (sb) {
                 float pb = pressure[i - 1][j] + (density * dx / dt) * (0.0 - velY[i][j]);
                 pressure_grady = (pressure[i-1][j]-pb) / dx;
+            }
+            //air boundary condition, the pressure is 0, set the i=-1 or i=RESY to 0 if it is not solid to avoid error
+            else if (at || i == 0)
+            {
+                pressure_grady = (0.0 - pressure[i][j]) / dx;
+            }
+            else if (ab || i == RESY)
+            {
+                pressure_grady = (pressure[i - 1][j] - 0.0) / dx;
             }
             else
             {
@@ -258,7 +354,6 @@ void FluidSolver::construct_vel_center() {
 		}
 	}
 }
-
 
 void FluidSolver::initialize_sinusoidal_vel_field(float frequency, float amplitude)
 {
@@ -307,6 +402,37 @@ void FluidSolver::initialize_smoke_field() {
     }
 }
 
+void FluidSolver::initialize_environment() {
+    /*
+    Sets the air and solid cells
+    */
+    //solid cells
+    for (int i = 0; i < RESX + 2; i++) {
+        for (int j = 0; j < RESY+2;j++) {
+            //make the border solid
+            if (i == 0 || i == RESY + 1 || j == 0 || j == RESX + 1) {
+                solid_map[i][j] = true;
+            }
+
+            //draw sphere obstical in the center
+            /*if (std::pow((i - RESY / 2), 2) + std::pow((j - RESX / 2), 2) < 50) {
+                solid_map[i][j] = true;
+            }*/
+        }
+    }
+    //air cells
+    for (int i = 0; i < RESX + 2; i++) {
+        for (int j = 0; j < RESY + 2; j++) {
+            //make the border air
+            
+            if (i == 0 || i == RESY + 1 || j == 0 || j == RESX + 1) {
+                air_map[i][j] = true;
+            }
+            
+        }
+    }
+}
+
 void FluidSolver::add_smoke_inflow() {
     /*
     adds constant flow to the scene
@@ -329,7 +455,7 @@ void FluidSolver::initialize_temperature_field() {
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
             if (i > RESY - 8 && i < RESY - 1 && j > RESX / 2 - RESX / 6 && j < RESX / 2 + RESX / 6) {
-                temperature[i][j] = 70.0;
+                temperature[i][j] = T_incoming;
             }
             else
             {
@@ -630,4 +756,26 @@ float FluidSolver::sample_velY(Vec2 pos)
     float interpolation = vx0 * (1.0f - ty) + vx1 * ty;
 
     return vx0 * (1.0f - ty) + vx1 * ty;
+}
+
+void FluidSolver::blue_red_color_map(float val, float normalization_factor, float& r, float& g, float& b) {
+    float t = val / normalization_factor;
+    t = std::max(-1.0f, std::min(1.0f, t));
+
+    if (t > 0.0f) {
+        // positive: black -> red
+        r = t;          // 0..1
+        g = 0.0f;
+        b = 0.0f;
+    }
+    else if (t < 0.0f) {
+        // negative: black -> blue
+        r = 0.0f;
+        g = 0.0f;
+        b = -t;         // t in [-1,0] -> 1..0
+    }
+    else {
+        // exactly zero: black
+        r = g = b = 0.0f;
+    }
 }

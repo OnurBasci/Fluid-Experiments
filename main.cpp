@@ -14,8 +14,8 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow* window);
 
 // settings
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 600;
+const unsigned int SCR_WIDTH = 1000;
+const unsigned int SCR_HEIGHT = 800;
 
 int main()
 {
@@ -136,8 +136,8 @@ int main()
 
         // render fluid
         texture1.Bind();
-        texture1.update_texture_data(fluid_solver.array_to_bytes(fluid_solver.temperature, 100.0));
-        //texture1.update_texture_data(fluid_solver.velX_bytes);
+        //texture1.update_texture_data(fluid_solver.array_to_bytes(fluid_solver.smoke, 1.0));
+        texture1.update_texture_data(fluid_solver.scene_bytes);
         ourShader.use();
         glBindVertexArray(VAO);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
