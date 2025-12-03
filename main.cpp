@@ -94,9 +94,7 @@ int main()
 
     // load and create a texture 
     // -------------------------
-    TextureGenerator tex_gen(100, 100, 1);
     FluidSolver fluid_solver;
-    //fluid_solver.solve_smoke();
     
     Texture texture1(fluid_solver.velX_bytes, fluid_solver.resX, fluid_solver.resY, 3, "texture1", 0);
     texture1.texUnit(ourShader, "texture1", 0);

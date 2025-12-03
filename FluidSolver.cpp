@@ -6,9 +6,15 @@
 
 #define PI 3.14159265358979323846f
 
-FluidSolver::FluidSolver() {
+FluidSolver::FluidSolver() : velX(RESY, RESX + 1), velY(RESY + 1, RESX), pressure(RESY, RESX), divergence(RESY, RESX), smoke(RESY, RESX),
+temperature(RESY, RESX), solid_map(RESY + 2, RESX + 2), air_map(RESY + 2, RESX + 2), vel_center(RESY, RESX), velX_temp(RESY, RESX + 1), velY_temp(RESY+1, RESX) {
 	this->resX = RESX;
 	this->resY = RESY;
+
+    //allocate memory for velocity bytes
+    velX_bytes.reserve(RESX * RESY * 3);
+    velY_bytes.reserve(RESX * RESY * 3);
+    vel_bytes.reserve(RESX * RESY * 3);
 
     //initialize_sinusoidal_vel_field(2, 1);
 
@@ -22,10 +28,10 @@ FluidSolver::FluidSolver() {
 }
 
 void FluidSolver::solve_smoke() {
-    update_scene(VisualizeField::Smoke);
+    update_scene(VisualizeField::Temperature);
     add_smoke_inflow();
     add_temperature_inflow();
-    //determine_time_step();
+    determine_time_step();
     advect_quantity(smoke);
     advect_quantity(temperature);
     advect_velocity();
@@ -45,7 +51,7 @@ void FluidSolver::update_scene(VisualizeField field_type=VisualizeField::Smoke) 
     for (int i = resY - 1; i >= 0; i--) {
         for (int j = 0; j < RESX; j++) {
             //set obstacles
-            if (solid_map[i+1][j+1]) {
+            if (solid_map(i+1,j+1)) {
                 unsigned char cr = static_cast<unsigned char>(0.0f);
                 unsigned char cg = static_cast<unsigned char>(0.0f);
                 unsigned char cb = static_cast<unsigned char>(255.0f);
@@ -63,27 +69,27 @@ void FluidSolver::update_scene(VisualizeField field_type=VisualizeField::Smoke) 
                 switch (field_type)
                 {
                 case VisualizeField::Smoke:
-                    value = smoke[i][j] / 1.0; // maxAbsX;
+                    value = smoke(i,j) / 1.0; // maxAbsX;
                     value = std::min(1.0f, value);
                     cr = static_cast<unsigned char>(value * 255.0f);
                     cg = static_cast<unsigned char>(value * 255.0f);
                     cb = static_cast<unsigned char>(value * 255.0f);
                     break;
                 case VisualizeField::Temperature:
-                    value = temperature[i][j] / T_incoming; // maxAbsX;
+                    value = temperature(i,j) / T_incoming; // maxAbsX;
                     value = std::min(T_incoming, value);
                     cr = static_cast<unsigned char>(value * 255.0f);
-                    cg = static_cast<unsigned char>(0.0f);
-                    cb = static_cast<unsigned char>(0.0f);
+                    cg = static_cast<unsigned char>(value * 255.0f);
+                    cb = static_cast<unsigned char>(value * 255.0f);
                     break;
                 case VisualizeField::Pressure:
-                    blue_red_color_map(pressure[i][j], 20.0, r, g, b);
+                    blue_red_color_map(pressure(i,j), 20.0, r, g, b);
                     cr = static_cast<unsigned char>(r * 255.0f);
                     cg = static_cast<unsigned char>(g * 255.0f);
                     cb = static_cast<unsigned char>(b * 255.0f);
                     break;
                 case VisualizeField::Divergence:
-                    blue_red_color_map(divergence[i][j], 1.0, r, g, b);
+                    blue_red_color_map(divergence(i,j), 1.0, r, g, b);
                     cr = static_cast<unsigned char>(r * 255.0f);
                     cg = static_cast<unsigned char>(g * 255.0f);
                     cb = static_cast<unsigned char>(b * 255.0f);
@@ -115,16 +121,15 @@ void FluidSolver::determine_time_step() {
     float umax = std::numeric_limits<float>::min();
     for (int i = 0; i < RESY; i ++) {
         for (int j = 0; j < RESX; j++) {
-            if (vel_center[i][j].length() > umax)
+            if (vel_center(i,j).length() > umax)
             {
-                umax = vel_center[i][j].length();
+                umax = vel_center(i,j).length();
             }
         }
     }
 
     umax = umax + std::sqrt(5 * dx * gravity);
-    dt = 0.5 * 5 * dx / umax;
-    std::cout << "dt " << dt <<std::endl;
+    dt =dt_coeff *  0.5 * 5 * dx / umax;
 }
 
 void FluidSolver::advect_velocity() {
@@ -133,68 +138,66 @@ void FluidSolver::advect_velocity() {
     */
 
     //update velX
-    float velX_temp[RESY][RESX + 1] = {};
+    //Field2D<float> velX_temp(resY, resX + 1);
 
     for (int i = 0; i < resY; i ++) {
         for (int j = 0; j < resX+1; j ++) {
             float vy;
             if (j == 0)
-                vy = (velY[i][j] + velY[i + 1][j]) / 2.0;
+                vy = (velY(i,j) + velY(i + 1, j)) / 2.0;
             else if (j == resX)
-                vy = (velY[i][j - 1] + velY[i + 1][j - 1]) / 2.0;
+                vy = (velY(i, j - 1) + velY(i + 1, j - 1)) / 2.0;
             else 
-                vy = (velY[i][j - 1] + velY[i + 1][j - 1] + velY[i][j] + velY[i + 1][j]) / 4.0;
+                vy = (velY(i, j - 1) + velY(i + 1, j - 1) + velY(i, j) + velY(i + 1, j)) / 4.0;
             //get the velocity vector at U_i+1/2, j
-            float vx = velX[i][j];
+            float vx = velX(i, j);
             Vec2 dir(vx, -vy); //velocity in index coordinates
 
             //Semi lagrangian advection
             Vec2 prev_pos = Vec2(static_cast<float>(j), static_cast<float>(i)) - dt * dir;
 
-            velX_temp[i][j] = sample_velX(prev_pos);
+            velX_temp(i,j) = sample_velX(prev_pos);
         }
     }
 
-    std::memcpy(velX, velX_temp, sizeof(velX_temp));
+    std::swap(velX, velX_temp);
 
     //update velY
-    float velY_temp[RESY+1][RESX] = {};
 
     for (int i = 0; i < resY+1; i++) {
         for (int j = 0; j < resX; j++) {
             //interpolalate vel y at i+1/2,j
             float vx;
             if (i == 0)
-                vx = (velX[i][j] + velX[i][j + 1]) / 2.0;
+                vx = (velX(i, j) + velX(i, j + 1)) / 2.0;
             else if (i == resY)
-                vx = (velX[i - 1][j] + velX[i - 1][j + 1]) / 2.0;
+                vx = (velX(i - 1, j) + velX(i - 1, j + 1)) / 2.0;
             else
-                vx = (velX[i-1][j] + velX[i-1][j+1] + velX[i][j] + velX[i][j+1]) / 4.0;
+                vx = (velX(i-1, j) + velX(i-1, j+1) + velX(i, j) + velX(i, j+1)) / 4.0;
             //get the velocity vector at U_i+1/2, j
-            float vy = velY[i][j];
+            float vy = velY(i, j);
             Vec2 dir(vx, -vy); //velocity in index coordinates
 
             //Semi lagrangian advection
             Vec2 prev_pos = Vec2(static_cast<float>(j), static_cast<float>(i)) - dt * dir;
 
-            velY_temp[i][j] = sample_velY(prev_pos);
+            velY_temp(i, j) = sample_velY(prev_pos);
         }
     }
-
-    std::memcpy(velY, velY_temp, sizeof(velX_temp));
+    std::swap(velY, velY_temp);
 }
 
-void FluidSolver::advect_quantity(float arr[RESY][RESX]) {
+void FluidSolver::advect_quantity(Field2D<float> &field) {
     for (int i = 0; i < RESY; i ++) {
         for (int j = 0; j < RESX; j++) {
-            float vx = (velX[i][j] + velX[i][j + 1]) / 2;
-            float vy = (velY[i][j] + velY[i][j + 1]) / 2;
+            float vx = (velX(i, j) + velX(i, j + 1)) / 2;
+            float vy = (velY(i, j) + velY(i, j + 1)) / 2;
 
             Vec2 dir(vx, -vy); //velocity in index coordinates
 
             //Semi lagrangian advection
             Vec2 prev_pos = Vec2(static_cast<float>(j), static_cast<float>(i)) - dt * dir;
-            arr[i][j] = sample_quantity(arr, prev_pos);
+            field(i,j) = sample_quantity(field, prev_pos);
         }
     }
 }
@@ -208,7 +211,7 @@ void FluidSolver::smoke_add_external_force() {
             //add gravity and bouyouncy
             float bouyouncy_force = -density_alpha * sample_quantity(smoke, Vec2(j, i - 0.5)) + bouyancy * (sample_quantity(temperature, Vec2(j, i-0.5)) - T_amb);
             float g_force = -gravity;
-            velY[i][j] += dt * (bouyouncy_force+gravity);
+            velY(i, j) += dt * (bouyouncy_force+gravity);
         }
     }
 }
@@ -223,7 +226,7 @@ void FluidSolver::project() {
 void FluidSolver::compute_divergence() {
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
-            divergence[i][j] = ((velX[i][j + 1] - velX[i][j]) + (velY[i][j] - velY[i+1][j]))/dx;
+            divergence(i,j) = ((velX(i, j + 1) - velX(i, j)) + (velY(i, j) - velY(i+1, j)))/dx;
         }
     }
 }
@@ -232,10 +235,10 @@ void FluidSolver::compute_divergence_field() {
     divergence_field = 0.0;
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
-            divergence_field += std::abs(divergence[i][j]);
+            divergence_field += std::abs(divergence(i,j));
         }
     }
-    std::cout << "divergence field " << divergence_field << std::endl;
+    //std::cout << "divergence field " << divergence_field << std::endl;
 }
 
 void FluidSolver::gauss_seidel_pressure_solve() {
@@ -247,25 +250,25 @@ void FluidSolver::gauss_seidel_pressure_solve() {
         for (int i = 0; i < RESY; i++) {
             for (int j = 0; j < RESX; j++) {
                 //continue if a solid cell
-                if (solid_map[i + 1][j + 1]) continue;
+                if (solid_map(i + 1, j + 1)) continue;
 
                 //solve pressure
-                int st = solid_map[i][j+1]; int sb = solid_map[i + 2][j+1]; int sl = solid_map[i + 1][j]; int sr = solid_map[i + 1][j + 2];
-                int at = air_map[i][j + 1]; int ab = air_map[i + 2][j + 1]; int al = air_map[i + 1][j]; int ar = air_map[i + 1][j + 2];
+                int st = solid_map(i, j+1); int sb = solid_map(i + 2, j+1); int sl = solid_map(i + 1,j); int sr = solid_map(i + 1, j + 2);
+                int at = air_map(i, j + 1); int ab = air_map(i + 2,j + 1); int al = air_map(i + 1,j); int ar = air_map(i + 1,j + 2);
                 int sum_occ = st + sr + sb + sl;
                 int free_neigh = 4 - sum_occ;
                 //the pressure is 0 if solid or air cell
-                float pt = st||at ? 0.0 : pressure[i - 1][j];
-                float pr = sr||ar ? 0.0 : pressure[i][j + 1];
-                float pb = sb||ab ? 0.0 : pressure[i + 1][j];
-                float pl = sl||al ? 0.0 : pressure[i][j - 1];
+                float pt = st||at ? 0.0 : pressure(i - 1,j);
+                float pr = sr||ar ? 0.0 : pressure(i,j + 1);
+                float pb = sb||ab ? 0.0 : pressure(i + 1,j);
+                float pl = sl||al ? 0.0 : pressure(i,j - 1);
 
                 float pressure_part = (pr + pl + pt + pb);
-                float div_part = -density * dx * (((!sr)*velX[i][j + 1] - (!sl)*velX[i][j]) + ((!st)*velY[i][j] - (!sb)*velY[i + 1][j])) / dt;
+                float div_part = -density * dx * (((!sr)*velX(i, j + 1) - (!sl)*velX(i, j)) + ((!st)*velY(i, j) - (!sb)*velY(i + 1, j))) / dt;
                 //overrelaxation
                 float pressure_new = (pressure_part + div_part) / free_neigh;
-                float pressure_old = pressure[i][j];
-                pressure[i][j] = pressure_old + (pressure_new - pressure_old) * gauss_seidel_over_relaxation;
+                float pressure_old = pressure(i,j);
+                pressure(i,j) = pressure_old + (pressure_new - pressure_old) * gauss_seidel_over_relaxation;
             }
         }
     }
@@ -276,36 +279,36 @@ void FluidSolver::update_incompressible_velocity() {
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX+1; j ++) {
             //continue if a solid cell
-            if (solid_map[i + 1][j + 1]) continue;
+            if (solid_map(i + 1,j + 1)) continue;
 
             //get solid and air cells
-            int sl = solid_map[i + 1][j]; int sr = solid_map[i + 1][j + 1];
-            int al = air_map[i + 1][j]; int ar = air_map[i + 1][j + 1];
+            int sl = solid_map(i + 1,j); int sr = solid_map(i + 1,j + 1);
+            int al = air_map(i + 1,j); int ar = air_map(i + 1,j + 1);
 
             float pressure_gradx;
             //solid boundary condition, find the pressure that makes the velocity 0
             if (sl) {
-                float pl = pressure[i][j] + (density * dx / dt) * (0.0-velX[i][j]);
-                pressure_gradx = (pressure[i][j] - pl) / dx;
+                float pl = pressure(i,j) + (density * dx / dt) * (0.0-velX(i, j));
+                pressure_gradx = (pressure(i,j) - pl) / dx;
             }
             else if (sr) {
-                float pr = pressure[i][j-1] + (density * dx / dt) * (velX[i][j] - 0.0);
-                pressure_gradx = (pr-pressure[i][j - 1])/dx;
+                float pr = pressure(i,j-1) + (density * dx / dt) * (velX(i, j) - 0.0);
+                pressure_gradx = (pr-pressure(i,j - 1))/dx;
             }
             //air boundary condition, the pressure is 0 set the j=-1 or j=RESX to 0 if it is not solid to avoid error
             else if(al || j == 0)
             {
-                pressure_gradx = (pressure[i][j] - 0.0) / dx;
+                pressure_gradx = (pressure(i,j) - 0.0) / dx;
             }
             else if (ar || j == RESX)
             {
-                pressure_gradx = (0.0 - pressure[i][j - 1]) / dx;
+                pressure_gradx = (0.0 - pressure(i,j - 1)) / dx;
             }
             else
             {
-                pressure_gradx = (pressure[i][j] - pressure[i][j - 1]) / dx;
+                pressure_gradx = (pressure(i,j) - pressure(i,j - 1)) / dx;
             }
-            velX[i][j] = velX[i][j] - dt / density * pressure_gradx;
+            velX(i, j) = velX(i, j) - dt / density * pressure_gradx;
         }
     }
 
@@ -313,33 +316,33 @@ void FluidSolver::update_incompressible_velocity() {
     for (int i = 0; i < RESY+1; i++) {
         for (int j = 0; j < RESX; j++) {
             //get solid and air cells
-            int st = solid_map[i][j + 1]; int sb = solid_map[i + 1][j + 1];
-            int at = air_map[i][j + 1]; int ab = air_map[i + 1][j + 1];
+            int st = solid_map(i,j + 1); int sb = solid_map(i + 1,j + 1);
+            int at = air_map(i,j + 1); int ab = air_map(i + 1,j + 1);
 
             //solid boundary condition, find the pressure that makes the velocity 0
             float pressure_grady;
             if (st) {
-                float pt = pressure[i][j] + (density * dx / dt) * (velY[i][j] - 0.0);
-                pressure_grady = (pt - pressure[i][j]) / dx;
+                float pt = pressure(i,j) + (density * dx / dt) * (velY(i, j) - 0.0);
+                pressure_grady = (pt - pressure(i,j)) / dx;
             }
             else if (sb) {
-                float pb = pressure[i - 1][j] + (density * dx / dt) * (0.0 - velY[i][j]);
-                pressure_grady = (pressure[i-1][j]-pb) / dx;
+                float pb = pressure(i - 1,j) + (density * dx / dt) * (0.0 - velY(i, j));
+                pressure_grady = (pressure(i-1,j)-pb) / dx;
             }
             //air boundary condition, the pressure is 0, set the i=-1 or i=RESY to 0 if it is not solid to avoid error
             else if (at || i == 0)
             {
-                pressure_grady = (0.0 - pressure[i][j]) / dx;
+                pressure_grady = (0.0 - pressure(i,j)) / dx;
             }
             else if (ab || i == RESY)
             {
-                pressure_grady = (pressure[i - 1][j] - 0.0) / dx;
+                pressure_grady = (pressure(i - 1,j) - 0.0) / dx;
             }
             else
             {
-                pressure_grady = (pressure[i-1][j] - pressure[i][j]) / dx;
+                pressure_grady = (pressure(i-1,j) - pressure(i,j)) / dx;
             }
-            velY[i][j] = velY[i][j] - dt / density * pressure_grady;
+            velY(i, j) = velY(i, j) - dt / density * pressure_grady;
         }
     }
 }
@@ -347,8 +350,8 @@ void FluidSolver::update_incompressible_velocity() {
 void FluidSolver::construct_vel_center() {
 	for (int i = 0; i < resY; i++) {
 		for (int j = 0; j < resX; j ++) {
-			float velx = (velX[i][j] + velX[i][j + 1]) / 2;
-			float vely = (velY[i][j] + velY[i + 1][j]) / 2;
+			float velx = (velX(i, j) + velX(i, j + 1)) / 2;
+			float vely = (velY(i, j) + velY(i + 1, j)) / 2;
 
 			vel_center[i][j] = Vec2(velx, vely);
 		}
@@ -369,7 +372,7 @@ void FluidSolver::initialize_sinusoidal_vel_field(float frequency, float amplitu
         for (int i = 0; i <= resX; ++i)
         {
             float x = i * dx;
-            velX[j][i] = amplitude* std::sin(twoPiF * x);
+            velX(j, i) = amplitude* std::sin(twoPiF * x);
         }
     }
 
@@ -379,7 +382,7 @@ void FluidSolver::initialize_sinusoidal_vel_field(float frequency, float amplitu
         for (int i = 0; i < resX; ++i)
         {
             float x = (i + 0.5f) * dx;
-            velY[j][i] = amplitude* std::sin(twoPiF * y);
+            velY(j, i) = amplitude* std::sin(twoPiF * y);
         }
     }
 }
@@ -392,11 +395,11 @@ void FluidSolver::initialize_smoke_field() {
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
             if (std::pow((i - RESY/2 - 30),2) + std::pow((j - RESX/2), 2) < 100) {
-                smoke[i][j] = 1.0;
+                smoke(i,j) = 1.0;
             }
             else
             {
-                smoke[i][j] = 0.0;
+                smoke(i,j) = 0.0;
             }
         }
     }
@@ -411,7 +414,7 @@ void FluidSolver::initialize_environment() {
         for (int j = 0; j < RESY+2;j++) {
             //make the border solid
             if (i == 0 || i == RESY + 1 || j == 0 || j == RESX + 1) {
-                solid_map[i][j] = true;
+                solid_map(i,j) = true;
             }
 
             //draw sphere obstical in the center
@@ -426,7 +429,7 @@ void FluidSolver::initialize_environment() {
             //make the border air
             
             if (i == 0 || i == RESY + 1 || j == 0 || j == RESX + 1) {
-                air_map[i][j] = true;
+                air_map(i,j) = true;
             }
             
         }
@@ -441,7 +444,7 @@ void FluidSolver::add_smoke_inflow() {
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
             if (std::pow((i - RESY / 2 - 30), 2) + std::pow((j - RESX / 2), 2) < 100) {
-                smoke[i][j] = 1.0;
+                smoke(i,j) = 1.0;
             }
         }
     }
@@ -455,11 +458,11 @@ void FluidSolver::initialize_temperature_field() {
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
             if (i > RESY - 8 && i < RESY - 1 && j > RESX / 2 - RESX / 6 && j < RESX / 2 + RESX / 6) {
-                temperature[i][j] = T_incoming;
+                temperature(i,j) = T_incoming;
             }
             else
             {
-                temperature[i][j] = T_amb;
+                temperature(i,j) = T_amb;
             }
         }
     }
@@ -473,7 +476,7 @@ void FluidSolver::add_temperature_inflow() {
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
             if (i > RESY - 8 && i < RESY - 1 && j > RESX / 2 - RESX / 6 && j < RESX / 2 + RESX / 6) {
-                temperature[i][j] = 70.0;
+                temperature(i,j) = 70.0;
             }
         }
     }
@@ -483,10 +486,9 @@ void FluidSolver::set_velocity_bytes() {
     /*
     Fills the velocity bytes from the velocity arrays 
     */
-    //initialize the byte vector
-    velX_bytes = {};
-    velY_bytes = {};
-    vel_bytes = {};
+    velX_bytes.clear();
+    velY_bytes.clear();
+    vel_bytes.clear();
 
     //Find the maximum velocity x and y
     float max_x = -std::numeric_limits<float>::max();
@@ -494,17 +496,17 @@ void FluidSolver::set_velocity_bytes() {
     float min_x = std::numeric_limits<float>::max();
     float min_y = std::numeric_limits<float>::max();
     for (int i = 0; i < resY; i ++) {
-        for (int j = 0; j < RESX; j ++) {
-            if (vel_center[i][j].x > max_x) {
+        for (int j = 0; j < resX; j ++) {
+            if (vel_center(i,j).x > max_x) {
                 max_x = vel_center[i][j].x;
             }
-            if (vel_center[i][j].y > max_y) {
+            if (vel_center(i,j).y > max_y) {
                 max_y = vel_center[i][j].y;
             }
-            if (vel_center[i][j].x < min_x) {
+            if (vel_center(i,j).x < min_x) {
                 min_x = vel_center[i][j].x;
             }
-            if (vel_center[i][j].y < min_y) {
+            if (vel_center(i,j).y < min_y) {
                 min_y = vel_center[i][j].y;
             }
         }
@@ -519,8 +521,8 @@ void FluidSolver::set_velocity_bytes() {
     //set the velocity values into the bytes
     for (int i = resY-1; i >= 0; i--) {
         for (int j = 0; j < resX; j++) {
-            float vx = vel_center[i][j].x;
-            float vy = vel_center[i][j].y;
+            float vx = vel_center(i,j).x;
+            float vy = vel_center(i,j).y;
 
             // Normalize to 0–1
             float nx = (vx - min_x) / (max_x - min_x);
@@ -666,7 +668,7 @@ std::vector<unsigned char> FluidSolver::array_to_bytes(float arr[RESY][RESX], fl
     return bytes;
 }
 
-float FluidSolver::sample_quantity(float arr[RESY][RESX], Vec2 pos) {
+float FluidSolver::sample_quantity(Field2D<float> &field, Vec2 pos) {
     // Clamp position to valid index range
     float x = std::clamp(pos.x, 0.0f, static_cast<float>(RESX - 1));      // velX has RESX+1 in x
     float y = std::clamp(pos.y, 0.0f, static_cast<float>(RESY - 1));  // 0 .. RESY-1 in y
@@ -682,10 +684,10 @@ float FluidSolver::sample_quantity(float arr[RESY][RESX], Vec2 pos) {
     float tx = x - static_cast<float>(j0);
     float ty = y - static_cast<float>(i0);
 
-    float q00 = arr[i0][j0];
-    float q10 = arr[i0][j1];
-    float q01 = arr[i1][j0];
-    float q11 = arr[i1][j1];
+    float q00 = field(i0,j0);
+    float q10 = field(i0,j1);
+    float q01 = field(i1,j0);
+    float q11 = field(i1,j1);
 
     // Bilinear interpolation
     float qx0 = q00 * (1.0f - tx) + q10 * tx;
@@ -713,10 +715,10 @@ float FluidSolver::sample_velX(Vec2 pos)
     float tx = x - static_cast<float>(j0);
     float ty = y - static_cast<float>(i0);
 
-    float v00 = velX[i0][j0];
-    float v10 = velX[i0][j1];
-    float v01 = velX[i1][j0];
-    float v11 = velX[i1][j1];
+    float v00 = velX(i0, j0);
+    float v10 = velX(i0, j1);
+    float v01 = velX(i1, j0);
+    float v11 = velX(i1, j1);
     
     // Bilinear interpolation
     float vx0 = v00 * (1.0f - tx) + v10 * tx;
@@ -744,10 +746,10 @@ float FluidSolver::sample_velY(Vec2 pos)
     float tx = x - static_cast<float>(j0);
     float ty = y - static_cast<float>(i0);
 
-    float v00 = velY[i0][j0];
-    float v10 = velY[i0][j1];
-    float v01 = velY[i1][j0];
-    float v11 = velY[i1][j1];
+    float v00 = velY(i0,j0);
+    float v10 = velY(i0,j1);
+    float v01 = velY(i1,j0);
+    float v11 = velY(i1,j1);
 
     // Bilinear interpolation
     float vx0 = v00 * (1.0f - tx) + v10 * tx;

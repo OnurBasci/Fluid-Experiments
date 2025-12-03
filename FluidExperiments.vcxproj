@@ -152,6 +152,7 @@
     <ClCompile Include="TextureGenerator.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Field2D.h" />
     <ClInclude Include="FluidSolver.h" />
     <ClInclude Include="shader.h" />
     <ClInclude Include="stb_image.h" />

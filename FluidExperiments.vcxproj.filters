@@ -56,6 +56,9 @@
     <ClInclude Include="Vec2.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="Field2D.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="vertex.vs">

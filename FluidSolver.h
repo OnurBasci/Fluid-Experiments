@@ -2,6 +2,7 @@
 #define FLUID_SOLVER_H
 #include<vector>
 #include "Vec2.h"
+#include "Field2D.h"
 
 const int RESX = 100;
 const int RESY = 100;
@@ -19,8 +20,9 @@ class FluidSolver {
 public:
 	int resX;
 	int resY;
-
-	float dt = 1.0 / RESX;
+	
+	float dt;
+	float dt_coeff = 20;
 	float dx = 1.0 / RESX; //I suppose the fluid is in range [0,1][0,1]
 
 	float density = 1.0;
@@ -31,18 +33,20 @@ public:
 	float T_incoming = 70.0;
 
 	//staggered grid with array for x and y
-	float velX[RESY][RESX +1];
-	float velY[RESY+1][RESX];
+	Field2D<float> velX;
+	Field2D<float> velX_temp; //for swaping
+	Field2D<float> velY;
+	Field2D<float> velY_temp;
 
 	//center velocity field
-	Vec2 vel_center[RESY][RESX];
+	Field2D<Vec2> vel_center;
 
-	float pressure[RESY][RESX];
-	float divergence[RESY][RESX];
-	float smoke[RESY][RESX];
-	float temperature[RESY][RESX];
-	bool solid_map[RESX + 2][RESX + 2];
-	bool air_map[RESX + 2][RESX + 2];
+	Field2D<float> pressure;
+	Field2D<float> divergence;
+	Field2D<float> smoke;
+	Field2D<float> temperature;
+	Field2D<unsigned char> solid_map;
+	Field2D<unsigned char> air_map;
 	std::vector<unsigned char> scene_bytes;
 
 	int gauss_seidel_iterations = 50;
@@ -69,7 +73,7 @@ public:
 
 	void determine_time_step();
 	void advect_velocity();
-	void advect_quantity(float arr[RESY][RESX]);
+	void advect_quantity(Field2D<float> &field);
 	void smoke_add_external_force();
 	void project();
 	void compute_divergence();
@@ -79,7 +83,7 @@ public:
 
 	float sample_velX(Vec2 pos);
 	float sample_velY(Vec2 pos);
-	float sample_quantity(float arr[RESY][RESX], Vec2 pos);
+	float sample_quantity(Field2D<float> &field, Vec2 pos);
 
 	void compute_divergence_field();
 	void set_velocity_bytes();
