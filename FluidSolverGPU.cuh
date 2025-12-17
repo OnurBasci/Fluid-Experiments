@@ -8,8 +8,8 @@
 
 #define CLAMP(x, a, b) (( (x) < (a) ) ? (a) : ( ((x) > (b)) ? (b) : (x) ))
 
-constexpr int RESXGPU = 100;
-constexpr int RESYGPU = 100;
+constexpr int RESXGPU = 500;
+constexpr int RESYGPU = 500;
 
 class FluidSolverGPU {
 public:
@@ -38,6 +38,8 @@ public:
 	float* pressure_old;
 	float* smoke;
 	float* swap_smoke;
+	float* temperature;
+	float* swap_temperature;
 	float* divergence;
 	unsigned char* solid_map;
 	unsigned char* air_map;
@@ -56,6 +58,7 @@ public:
 	//initialization
 	void initialize_fields();
 	void initialize_environment();
+	void add_temperature_inflow();
 
 	//solver functions
 	void solve_smoke();

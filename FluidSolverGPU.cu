@@ -74,9 +74,6 @@ void compute_divergence_kernel(float* divergence, float* velX, float* velY, int 
 
     divergence[i*resX+j] = ((velX[i*resX_1+j + 1] - velX[i*resX_1+j]) + (velY[i*resX+j] - velY[(i + 1)*resX+j])) / dx;
 
-    /*if (i == resX / 2 && j == resY / 2) {
-        printf("divergence is %f \n", divergence[i * resX + j]);
-    }*/
 }
 
 __global__
@@ -101,6 +98,21 @@ void initialize_smoke_field(float* smoke, int resX, int resY) {
     float dist2 = dx * dx + dy * dy;
 
     smoke[i * resX + j] = (dist2 < r2) ? 1.0f : 0.0f;
+}
+
+__global__
+void add_temperature_inflow_kernel(float* temperature, int resX, int resY) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    int num_cells = resX * resY;
+    if (idx >= num_cells) return;
+
+    int i = idx / resX;
+    int j = idx % resX;
+
+    if (i > resY - 8 && i < resY - 1 && j > resX / 2 - resX / 6 && j < resX / 2 + resX / 6) {
+        temperature[i*resX+j] = 70.0;
+    }
 }
 
 __global__
@@ -182,7 +194,7 @@ void advect_quantity_kernel(float* field, float* swap_field, Vec2* vel, int resX
 }
 
 __global__
-void add_external_force_kernel(float* velY, int resX, int resY, float gravity, float dt) {
+void add_external_force_kernel(float* velY, float* smoke, float* temperature, int resX, int resY, float gravity, float dt, float d_a, float b, float T_amb) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
     int num_cells = resX * (resY + 1);
@@ -191,7 +203,11 @@ void add_external_force_kernel(float* velY, int resX, int resY, float gravity, f
     int i = idx / resX;
     int j = idx % resX;
 
-    velY[i * resX + j] -= dt* gravity;
+    //add bouyouncy force depending on the smoke density and temperature
+    float bouyouncy_force = -d_a * sample_scalar_field(smoke, Vec2(j, i - 0.5), resX, resY) + b * (sample_scalar_field(temperature, Vec2(j, i - 0.5), resX, resY) - T_amb);
+    float g_force = -gravity;
+
+    velY[i * resX + j] += dt * (bouyouncy_force + gravity);;
 }
 
 __global__
@@ -358,6 +374,8 @@ FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX*
     cudaMalloc(&pressure_old, (ResY * ResX) * sizeof(float));
     cudaMalloc(&smoke, (ResY * ResX) * sizeof(float));
     cudaMalloc(&swap_smoke, (ResY * ResX) * sizeof(float));
+    cudaMalloc(&temperature, (ResY * ResX) * sizeof(float));
+    cudaMalloc(&swap_temperature, (ResY * ResX) * sizeof(float));
     cudaMalloc(&divergence, (ResY * ResX) * sizeof(float));
     cudaMalloc(&air_map, (ResY+2)*(ResX+2) * sizeof(char));
     cudaMalloc(&solid_map, (ResY+2) * (ResX+2) * sizeof(char));
@@ -395,8 +413,15 @@ void FluidSolverGPU::initialize_fields() {
     initialize_smoke_field <<<grid_size, block_size>>> (smoke, ResX, ResY);
 }
 
+void FluidSolverGPU::add_temperature_inflow() {
+    int grid_size = (num_cells + block_size - 1) / block_size;
+
+    add_temperature_inflow_kernel<<<grid_size, block_size >>>(temperature, ResX, ResY);
+}
+
 void FluidSolverGPU::initialize_environment() {
-    //allocate solid and air map in cpu
+    //allocate cpu field memories
+    float* temperature_host = (float *) malloc(ResX*ResY*sizeof(float));
     unsigned char* solid_map_host = (unsigned char*)malloc((ResY+2)*(ResX+2)*sizeof(char));
     unsigned char* air_map_host = (unsigned char*)malloc((ResY+2) * (ResX+2) * sizeof(char));
 
@@ -405,7 +430,7 @@ void FluidSolverGPU::initialize_environment() {
         for (int j = 0; j < ResY + 2; j++) {
             //make the border solid
             if (i == 0 || i == ResY + 1 || j==0 || j==ResX+1) {
-                solid_map_host[i*(ResX+2)+j] = true;
+                solid_map_host[i * (ResX + 2) + j] = true;
             }
             else
             {
@@ -432,11 +457,26 @@ void FluidSolverGPU::initialize_environment() {
         }
     }
 
+    //initialize temperature
+    for (int i = 0; i < ResY; i++) {
+        for (int j = 0; j < ResX; j++) {
+            if (i > ResY - 8 && i < ResY - 1 && j > ResX / 2 - ResX / 6 && j < ResX / 2 + ResX / 6) {
+                temperature_host[i*ResX+j] = T_incoming;
+            }
+            else
+            {
+                temperature_host[i*ResX+j] = T_amb;
+            }
+        }
+    }
+
     //copy memory to gpu
+    cudaMemcpy(temperature, temperature_host, host_field_size, cudaMemcpyHostToDevice);
     size_t map_size = (ResX + 2) * (ResY + 2) * sizeof(char);
     cudaMemcpy(solid_map, solid_map_host, map_size, cudaMemcpyHostToDevice);
     cudaMemcpy(air_map, air_map_host, map_size, cudaMemcpyHostToDevice);
 
+    free(temperature_host);
     free(solid_map_host);
     free(air_map_host);
 }
@@ -455,6 +495,9 @@ void FluidSolverGPU::compute_divergence() {
 
 //Solver Functions
 void FluidSolverGPU::solve_smoke() {
+
+    add_temperature_inflow();
+
     //simulation steps
     advect_quantities();
     add_external_force();
@@ -464,7 +507,7 @@ void FluidSolverGPU::solve_smoke() {
     construct_velocity_center();
     //copy memory to show on CPU
     cudaMemcpy(host_vector_field, vel_center, host_vector_field_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(host_field, temperature, host_field_size, cudaMemcpyDeviceToHost);
 }
 
 
@@ -476,6 +519,9 @@ void FluidSolverGPU::advect_quantities() {
     //advect smoke
     int grid_size = (num_cells + block_size - 1) / block_size;
     advect_quantity_kernel<<<grid_size, block_size>>>(smoke, swap_smoke, vel_center, ResX, ResY, dt);
+
+    //advect temperature
+    advect_quantity_kernel <<<grid_size, block_size >>> (temperature, swap_temperature, vel_center, ResX, ResY, dt);
 
     //advect velX
     int number_of_cells = (ResX + 1) * ResY;
@@ -491,13 +537,14 @@ void FluidSolverGPU::advect_quantities() {
     std::swap(velX, velX_temp);
     std::swap(velY, velY_temp);
     std::swap(smoke, swap_smoke);
+    std::swap(temperature, swap_temperature);
 }
 
 void FluidSolverGPU::add_external_force() {
     int number_of_cells = ResX * (ResY+1);
     int grid_size = (number_of_cells + block_size - 1) / block_size;
 
-    add_external_force_kernel<<<grid_size, block_size>>>(velY, ResX, ResY, gravity, dt);
+    add_external_force_kernel<<<grid_size, block_size>>>(velY, smoke, temperature, ResX, ResY, gravity, dt, density_alpha, bouyancy, T_amb);
 }
 
 void FluidSolverGPU::project() {
@@ -652,6 +699,8 @@ FluidSolverGPU::~FluidSolverGPU() {
     cudaFree(pressure_old);
     cudaFree(smoke);
     cudaFree(swap_smoke);
+    cudaFree(temperature);
+    cudaFree(swap_temperature);
     cudaFree(divergence);
     cudaFree(solid_map);
     cudaFree(air_map);

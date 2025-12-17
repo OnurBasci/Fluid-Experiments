@@ -103,7 +103,7 @@ int main()
     //FluidSolver fluid_solver;
     FluidSolverGPU fluid_solverGPU;
 
-    Texture texture1(fluid_solverGPU.scalar_field_to_bytes(1.0), fluid_solverGPU.ResX, fluid_solverGPU.ResY, 3, "texture1", 0);
+    Texture texture1(fluid_solverGPU.scalar_field_to_bytes(100.0), fluid_solverGPU.ResX, fluid_solverGPU.ResY, 3, "texture1", 0);
     texture1.texUnit(ourShader, "texture1", 0);
 
     // render loop
@@ -143,7 +143,7 @@ int main()
         // render fluid
         texture1.Bind();
         //texture1.update_texture_data(fluid_solver.array_to_bytes(fluid_solver.smoke, 1.0));
-        texture1.update_texture_data(fluid_solverGPU.scalar_field_to_bytes(1.0));
+        texture1.update_texture_data(fluid_solverGPU.scalar_field_to_bytes(100.0));
         //texture1.update_texture_data(fluid_solver.scene_bytes);
         ourShader.use();
         glBindVertexArray(VAO);
