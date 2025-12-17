@@ -3,6 +3,7 @@
 #include<vector>
 #include "Vec2.h"
 #include "Field2D.h"
+#include "CudaConfig.h"
 
 const int RESX = 100;
 const int RESY = 100;
@@ -71,6 +72,7 @@ public:
 	void solve_smoke();
     void solve();
 
+	//CPU code for the simulation
 	void determine_time_step();
 	void advect_velocity();
 	void advect_quantity(Field2D<float> &field);
@@ -87,7 +89,7 @@ public:
 
 	void compute_divergence_field();
 	void set_velocity_bytes();
-
+	
 	static void blue_red_color_map(float val, float normalization_factor, float& r, float& g, float& b);
 	std::vector<unsigned char> array_to_bytes(float arr[RESY][RESX], float normalize_factor);
 };

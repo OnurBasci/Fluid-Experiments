@@ -7,6 +7,8 @@
 #include "Texture.h"
 #include "TextureGenerator.h"
 #include "FluidSolver.h"
+#include "File.cuh"
+#include "FluidSolverGPU.cuh"
 
 #include <iostream>
 
@@ -14,11 +16,13 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow* window);
 
 // settings
-const unsigned int SCR_WIDTH = 1000;
-const unsigned int SCR_HEIGHT = 800;
+const unsigned int SCR_WIDTH = 900;
+const unsigned int SCR_HEIGHT = 900;
 
 int main()
 {
+
+    add_vectors();
 
     // glfw: initialize and configure window
     // ------------------------------
@@ -53,7 +57,9 @@ int main()
 
     // build and compile our shader zprogram
     // ------------------------------------
-    Shader ourShader("vertex.vs", "frag.fs");
+    auto base = std::filesystem::current_path(); // or your executable dir
+    Shader ourShader((base / "vertex.vs").string().c_str(),
+        (base / "frag.fs").string().c_str());
 
     // set up vertex data (and buffer(s)) and configure vertex attributes
     // ------------------------------------------------------------------
@@ -94,9 +100,10 @@ int main()
 
     // load and create a texture 
     // -------------------------
-    FluidSolver fluid_solver;
-    
-    Texture texture1(fluid_solver.velX_bytes, fluid_solver.resX, fluid_solver.resY, 3, "texture1", 0);
+    //FluidSolver fluid_solver;
+    FluidSolverGPU fluid_solverGPU;
+
+    Texture texture1(fluid_solverGPU.scalar_field_to_bytes(1.0), fluid_solverGPU.ResX, fluid_solverGPU.ResY, 3, "texture1", 0);
     texture1.texUnit(ourShader, "texture1", 0);
 
     // render loop
@@ -117,7 +124,8 @@ int main()
         auto start = std::chrono::high_resolution_clock::now();
 
         //solver loop
-        fluid_solver.solve_smoke();
+        //fluid_solver.solve_smoke();
+        fluid_solverGPU.solve_smoke();
 
         auto end = std::chrono::high_resolution_clock::now();
         double ms = std::chrono::duration<double, std::milli>(end - start).count();
@@ -135,7 +143,8 @@ int main()
         // render fluid
         texture1.Bind();
         //texture1.update_texture_data(fluid_solver.array_to_bytes(fluid_solver.smoke, 1.0));
-        texture1.update_texture_data(fluid_solver.scene_bytes);
+        texture1.update_texture_data(fluid_solverGPU.scalar_field_to_bytes(1.0));
+        //texture1.update_texture_data(fluid_solver.scene_bytes);
         ourShader.use();
         glBindVertexArray(VAO);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);

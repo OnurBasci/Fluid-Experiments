@@ -394,7 +394,7 @@ void FluidSolver::initialize_smoke_field() {
 
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
-            if (std::pow((i - RESY/2 - 30),2) + std::pow((j - RESX/2), 2) < 100) {
+            if (std::pow((i - RESY/2),2) + std::pow((j - RESX/2), 2) < 100) {
                 smoke(i,j) = 1.0;
             }
             else

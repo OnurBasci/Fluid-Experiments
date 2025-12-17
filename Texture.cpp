@@ -106,6 +106,10 @@ Texture::Texture(std::vector<unsigned char> bytes, int widthImg, int heightImg, 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
+	// force only mip 0 to be used
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+
 	// Configures the way the texture repeats (if it does at all)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
@@ -132,7 +136,7 @@ Texture::Texture(std::vector<unsigned char> bytes, int widthImg, int heightImg, 
 		(
 			GL_TEXTURE_2D,
 			0,
-			GL_RGBA,
+			GL_RGB,
 			widthImg,
 			heightImg,
 			0,
