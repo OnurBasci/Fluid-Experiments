@@ -28,7 +28,7 @@ temperature(RESY, RESX), solid_map(RESY + 2, RESX + 2), air_map(RESY + 2, RESX +
 }
 
 void FluidSolver::solve_smoke() {
-    update_scene(VisualizeField::Temperature);
+    update_scene(VisualizeField::Divergence);
     add_smoke_inflow();
     add_temperature_inflow();
     determine_time_step();

@@ -195,7 +195,7 @@ void add_external_force_kernel(float* velY, int resX, int resY, float gravity, f
 }
 
 __global__
-void jacobi_pressure_solve(float* pressure_new, float* pressure_old, float* velX, float* velY, int resY, int resX, float density, float dx, float dt) {
+void jacobi_pressure_solve(float* pressure_new, float* pressure_old, float* velX, float* velY, unsigned char* solid_map, unsigned char * air_map, int resY, int resX, float density, float dx, float dt) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
     int num_cells = resX * (resY);
@@ -206,19 +206,22 @@ void jacobi_pressure_solve(float* pressure_new, float* pressure_old, float* velX
     int i = idx / resX;
     int j = idx % resX;
 
+    if (solid_map[(i + 1) * (resX+2) + (j + 1)]) return;
+
     //mark air and solid cells
-    unsigned char at = (i == 0); unsigned char ab = (i == resY - 1); unsigned char al = (j == 0); unsigned char ar = (j == resX-1);
-    unsigned char sb = (i == resY - 1);
-    unsigned char free_neigh = 4 - sb;
+    unsigned char st = solid_map[i*(resX + 2) + j + 1]; unsigned char sb = solid_map[(i + 2) * (resX + 2) + j + 1]; unsigned char sl = solid_map[(i + 1) * (resX + 2) + j]; unsigned char sr = solid_map[(i + 1) * (resX + 2) + j + 2];
+    unsigned char at = air_map[i * (resX + 2) + j + 1]; unsigned char ab = air_map[(i + 2) * (resX + 2) + j + 1]; unsigned char al = air_map[(i + 1) * (resX + 2) + j]; unsigned char ar = air_map[(i + 1) * (resX + 2) + j + 2];
+    int sum_occ = st + sb + sl + sr;
+    unsigned char free_neigh = 4 - sum_occ;
 
     //the pressure is 0 if solid or air cell
-    float pt = at ? 0.0 : pressure_old[(i - 1)*resX+ j];
-    float pr = ar ? 0.0 : pressure_old[i*resX + j + 1];
+    float pt = st||at ? 0.0 : pressure_old[(i - 1)*resX+ j];
+    float pr = sr||ar ? 0.0 : pressure_old[i*resX + j + 1];
     float pb = sb||ab ? 0.0 : pressure_old[(i + 1)*resX+ j];
-    float pl = al ? 0.0 : pressure_old[i*resX+ j - 1];
+    float pl = sl||al ? 0.0 : pressure_old[i*resX+ j - 1];
 
     float pressure_part = (pr + pl + pt + pb);
-    float div_part = -density * dx * ((velX[i*resX_1 + j+1] - velX[i*resX_1 + j]) + (velY[i*resX + j] - (!sb)*velY[(i + 1)*resX+j])) / dt;
+    float div_part = -density * dx * (((!sr)*velX[i*resX_1 + j+1] - (!sl)*velX[i*resX_1 + j]) + ((!st)*velY[i*resX + j] - (!sb)*velY[(i + 1)*resX+j])) / dt;
     //overrelaxation
     float p_new = (pressure_part + div_part) / free_neigh;
     pressure_new[i * resX + j] = p_new;
@@ -227,7 +230,7 @@ void jacobi_pressure_solve(float* pressure_new, float* pressure_old, float* velX
 }
 
 __global__
-void make_velX_incompressible(float *velX, float* pressure, int resX, int resY, float dx, float dt, float density) {
+void make_velX_incompressible(float *velX, float* pressure, unsigned char* solid_map, unsigned char* air_map, int resX, int resY, float dx, float dt, float density) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
     int num_cells = (resX+1) * resY;
@@ -238,11 +241,21 @@ void make_velX_incompressible(float *velX, float* pressure, int resX, int resY, 
     int i = idx / resX_1;
     int j = idx % resX_1;
 
-    unsigned char al = (j == 0); unsigned char ar = (j == resX);
+    unsigned char sl = solid_map[(i+1)*(resX + 2)+j]; unsigned char sr = solid_map[(i + 1)*(resX + 2)+j+1];
+    unsigned char al = air_map[(i+1)*(resX + 2)+j]; unsigned char ar = air_map[(i+1)*(resX + 2)+j+1];
+
     float pressure_gradx;
     //solid boundary condition, find the pressure that makes the velocity 0
+    if (sl) {
+        float pl = pressure[i*resX+j] + (density * dx / dt) * (0.0 - velX[i*resX_1+j]);
+        pressure_gradx = (pressure[i*resX+j] - pl) / dx;
+    }
+    else if (sr) {
+        float pr = pressure[i*resX+(j - 1)] + (density * dx / dt) * (velX[i*resX_1+j] - 0.0);
+        pressure_gradx = (pr - pressure[i*resX+(j - 1)]) / dx;
+    }
     //air boundary condition, the pressure is 0 set the j=-1 or j=RESX to 0 if it is not solid to avoid error
-    if (al)
+    else if (al)
     {
         pressure_gradx = (pressure[i*resX+j] - 0.0) / dx;
     }
@@ -258,7 +271,7 @@ void make_velX_incompressible(float *velX, float* pressure, int resX, int resY, 
 }
 
 __global__
-void make_velY_incompressible(float* velY, float* pressure, int resX, int resY, float dx, float dt, float density) {
+void make_velY_incompressible(float* velY, float* pressure, unsigned char* solid_map, unsigned char* air_map, int resX, int resY, float dx, float dt, float density) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
   
     int num_cells = resX * (resY+1);
@@ -267,12 +280,16 @@ void make_velY_incompressible(float* velY, float* pressure, int resX, int resY, 
     int i = idx / resX;
     int j = idx % resX;
 
-    unsigned char at = (i == 0); unsigned char ab = (i == resY);
-    unsigned char sb = (i == resY);
+    unsigned char st = solid_map[i * (resX + 2) + j + 1]; unsigned char sb = solid_map[(i + 1) * (resX + 2) + j + 1];
+    unsigned char at = air_map[i * (resX + 2) + j + 1]; unsigned char ab = air_map[(i + 1) * (resX + 2) + j + 1];
 
     float pressure_grady;
     //solid boundary condition, find the pressure that makes the velocity 0
-    if (sb) {
+    if (st) {
+        float pt = pressure[i*resX+j] + (density * dx / dt) * (velY[i*resX+j] - 0.0);
+        pressure_grady = (pt - pressure[i*resX+j]) / dx;
+    }
+    else if (sb) {
         float pb = pressure[(i - 1)*resX+j] + (density * dx / dt) * (0.0 - velY[i*resX+j]);
         pressure_grady = (pressure[(i - 1)*resX+j] - pb) / dx;
     }
@@ -387,8 +404,12 @@ void FluidSolverGPU::initialize_environment() {
     for (int i = 0; i < ResX + 2; i++) {
         for (int j = 0; j < ResY + 2; j++) {
             //make the border solid
-            if (i == ResY + 1) {
+            if (i == 0 || i == ResY + 1 || j==0 || j==ResX+1) {
                 solid_map_host[i*(ResX+2)+j] = true;
+            }
+            else
+            {
+                solid_map_host[i * (ResX + 2) + j] = false;
             }
 
             //draw sphere obstical in the center
@@ -405,6 +426,9 @@ void FluidSolverGPU::initialize_environment() {
             if (i == 0 || i == ResY + 1 || j == 0 || j == ResX + 1) {
                 air_map_host[i*(ResX+2)+j] = true;
             }
+            else {
+                air_map_host[i * (ResX + 2) + j] = false;
+            }
         }
     }
 
@@ -412,6 +436,9 @@ void FluidSolverGPU::initialize_environment() {
     size_t map_size = (ResX + 2) * (ResY + 2) * sizeof(char);
     cudaMemcpy(solid_map, solid_map_host, map_size, cudaMemcpyHostToDevice);
     cudaMemcpy(air_map, air_map_host, map_size, cudaMemcpyHostToDevice);
+
+    free(solid_map_host);
+    free(air_map_host);
 }
 
 void FluidSolverGPU::construct_velocity_center() {
@@ -478,7 +505,7 @@ void FluidSolverGPU::project() {
     int number_of_cells = ResX * ResY;
     int grid_size = (number_of_cells + block_size - 1) / block_size;
     for (int i = 0; i < jacobi_iteration; i++) {
-        jacobi_pressure_solve<<<grid_size, block_size>>>(pressure_new, pressure_old, velX, velY, ResX, ResY, density, dx, dt);
+        jacobi_pressure_solve<<<grid_size, block_size>>>(pressure_new, pressure_old, velX, velY, solid_map, air_map, ResX, ResY, density, dx, dt);
         if (i < jacobi_iteration-1) {
             std::swap(pressure_new, pressure_old);
         }
@@ -487,8 +514,8 @@ void FluidSolverGPU::project() {
     //make velocity incompressible
     number_of_cells = (ResX + 1) * ResY;
     grid_size = (number_of_cells + block_size - 1) / block_size;
-    make_velX_incompressible <<<grid_size, block_size >>> (velX, pressure_new, ResX, ResY, dx, dt, density);
-    make_velY_incompressible <<<grid_size, block_size>>> (velY, pressure_new, ResX, ResY, dx, dt, density);
+    make_velX_incompressible <<<grid_size, block_size >>> (velX, pressure_new, solid_map, air_map, ResX, ResY, dx, dt, density);
+    make_velY_incompressible <<<grid_size, block_size>>> (velY, pressure_new, solid_map, air_map, ResX, ResY, dx, dt, density);
 }
 
 //Visualization Helper
