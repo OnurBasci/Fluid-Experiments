@@ -1,6 +1,9 @@
 #include "FluidSolverGPU.cuh"
+//#include <thrust/device_ptr.h>
+#include <thrust/extrema.h>
+//#include <thrust/execution_policy.h>
 
-D
+CUDA_D
 float sample_scalar_field(float* field, Vec2 pos, int resX, int resY);
 
 //KERNELS
@@ -73,7 +76,6 @@ void compute_divergence_kernel(float* divergence, float* velX, float* velY, int 
     int j = idx % resX;
 
     divergence[i*resX+j] = ((velX[i*resX_1+j + 1] - velX[i*resX_1+j]) + (velY[i*resX+j] - velY[(i + 1)*resX+j])) / dx;
-
 }
 
 __global__
@@ -101,7 +103,7 @@ void initialize_smoke_field(float* smoke, int resX, int resY) {
 }
 
 __global__
-void add_temperature_inflow_kernel(float* temperature, int resX, int resY) {
+void add_block_inflow_bottom_kernel(float* field, int resX, int resY, float val) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
     int num_cells = resX * resY;
@@ -111,7 +113,27 @@ void add_temperature_inflow_kernel(float* temperature, int resX, int resY) {
     int j = idx % resX;
 
     if (i > resY - 8 && i < resY - 1 && j > resX / 2 - resX / 6 && j < resX / 2 + resX / 6) {
-        temperature[i*resX+j] = 70.0;
+        field[i * resX + j] = val;
+    }
+}
+
+__global__
+void add_block_inflow_left_kernel(float* field, int resX, int resY, float range, float val) {
+    /*
+    range [0,1] if 1 all the left covered
+    */
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    int num_cells = resX * resY;
+    if (idx >= num_cells) return;
+
+    int i = idx / resX;
+    int j = idx % resX;
+
+    int center = resX / 2;
+
+    if (j == 10 && i > center - range*center && i < center + range*center) {
+        field[i * resX + j] = val;
     }
 }
 
@@ -154,15 +176,17 @@ void advect_velocityY_kernel(float* velY, float* velY_temp, float* velX, int res
     int i = idx / resX;
     int j = idx % resX;
 
+    int resX_1 = resX + 1;
+
     float vy = velY[i*resX+j];
     float vx;
 
     if (i == 0)
-        vx = (velX[i*resX+j] + velX[i*resX+j + 1])/ 2.0;
+        vx = (velX[i*(resX_1)+j] + velX[i*(resX_1)+j + 1])/ 2.0;
     else if (i == resY)
-        vx = (velX[(i - 1)*resX+j] + velX[(i - 1)*resX+j + 1])/ 2.0;
+        vx = (velX[(i - 1)*resX_1+j] + velX[(i - 1)*resX_1+j + 1])/ 2.0;
     else
-        vx = (velX[(i - 1)*resX+j] + velX[(i - 1)*resX+j+1] + velX[i*resX+j] + velX[i*resX+j+1]) / 4.0;
+        vx = (velX[(i - 1)*resX_1+j] + velX[(i - 1)*resX_1+j+1] + velX[i*resX_1+j] + velX[i*resX_1+j+1]) / 4.0;
     //get the velocity vector at U_i+1/2, j
     Vec2 dir(vx*resX, -vy*resY); //velocity in index coordinates
 
@@ -188,13 +212,10 @@ void advect_quantity_kernel(float* field, float* swap_field, Vec2* vel, int resX
 
     float sample_val = sample_scalar_field(field, prev_pos, resX, resY);
     swap_field[i * resX + j] = sample_val;
-    /*if (i == resY / 2 && j == resX / 2) {
-        printf("i: %d j: %d center val %f \n", i, j, swap_field[i * resX + j]);
-    }*/
 }
 
 __global__
-void add_external_force_kernel(float* velY, float* smoke, float* temperature, int resX, int resY, float gravity, float dt, float d_a, float b, float T_amb) {
+void add_external_force_smoke_kernel(float* velY, float* smoke, float* temperature, int resX, int resY, float gravity, float dt, float d_a, float b, float T_amb) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
     int num_cells = resX * (resY + 1);
@@ -207,7 +228,26 @@ void add_external_force_kernel(float* velY, float* smoke, float* temperature, in
     float bouyouncy_force = -d_a * sample_scalar_field(smoke, Vec2(j, i - 0.5), resX, resY) + b * (sample_scalar_field(temperature, Vec2(j, i - 0.5), resX, resY) - T_amb);
     float g_force = -gravity;
 
-    velY[i * resX + j] += dt * (bouyouncy_force + gravity);;
+    velY[i * resX + j] += dt* (bouyouncy_force + g_force);;
+}
+
+__global__
+void add_external_force_wind_tunel_kernel(float* velX, int resX, int resY, float wind_force) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    int num_cells = (resX+1) * resY;
+    if (idx >= num_cells) return;
+
+    int resX_1 = (resX + 1);
+
+    int i = idx / resX_1;
+    int j = idx % resX_1;
+
+    int center = resY / 2;
+
+    if (j == 8 && i >= 0 * center && i < resY) {
+        velX[i * resX_1 + j] = wind_force;
+    }
 }
 
 __global__
@@ -241,8 +281,6 @@ void jacobi_pressure_solve(float* pressure_new, float* pressure_old, float* velX
     //overrelaxation
     float p_new = (pressure_part + div_part) / free_neigh;
     pressure_new[i * resX + j] = p_new;
-    //float pressure_old = pressure(i, j);
-    //pressure(i, j) = pressure_old + (pressure_new - pressure_old) * gauss_seidel_over_relaxation;
 }
 
 __global__
@@ -325,9 +363,10 @@ void make_velY_incompressible(float* velY, float* pressure, unsigned char* solid
     }
     velY[i*resX+j] = velY[i*resX+j] - dt / density * pressure_grady;
 }
+ 
 
 //DEVICE HELPER FUNCTIONS
-D
+CUDA_D
 float sample_scalar_field(float* field, Vec2 pos, int resX, int resY)
 {
     // Clamp position to valid index range
@@ -354,8 +393,6 @@ float sample_scalar_field(float* field, Vec2 pos, int resX, int resY)
     float vx0 = v00 * (1.0f - tx) + v10 * tx;
     float vx1 = v01 * (1.0f - tx) + v11 * tx;
 
-    float interpolation = vx0 * (1.0f - ty) + vx1 * ty;
-
     return vx0 * (1.0f - ty) + vx1 * ty;
 }
 
@@ -377,8 +414,9 @@ FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX*
     cudaMalloc(&temperature, (ResY * ResX) * sizeof(float));
     cudaMalloc(&swap_temperature, (ResY * ResX) * sizeof(float));
     cudaMalloc(&divergence, (ResY * ResX) * sizeof(float));
-    cudaMalloc(&air_map, (ResY+2)*(ResX+2) * sizeof(char));
-    cudaMalloc(&solid_map, (ResY+2) * (ResX+2) * sizeof(char));
+    cudaMallocManaged(&air_map, (ResY+2)*(ResX+2) * sizeof(char));
+    cudaMallocManaged(&solid_map, (ResY+2) * (ResX+2) * sizeof(char));
+    cudaMalloc(&scene_bytes, (ResY * ResX) * sizeof(float));
 
     //initialize cpu memory
     host_field_size = ResX * ResY * sizeof(float);
@@ -410,13 +448,22 @@ void FluidSolverGPU::initialize_fields() {
 
     //initialize smoke field
     grid_size = (num_cells + block_size - 1) / block_size;
-    initialize_smoke_field <<<grid_size, block_size>>> (smoke, ResX, ResY);
+    //add_block_inflow_bottom_kernel <<<grid_size, block_size >>> (smoke, ResX, ResY);
+    //initialize_smoke_field <<<grid_size, block_size>>> (smoke, ResX, ResY);
+    add_block_inflow_left_kernel << <grid_size, block_size >> > (smoke, ResX, ResY, 0.2, 1.0);
 }
 
 void FluidSolverGPU::add_temperature_inflow() {
     int grid_size = (num_cells + block_size - 1) / block_size;
 
-    add_temperature_inflow_kernel<<<grid_size, block_size >>>(temperature, ResX, ResY);
+    add_block_inflow_bottom_kernel<<<grid_size, block_size >>>(temperature, ResX, ResY, 70.0);
+}
+
+void FluidSolverGPU::add_smoke_inflow() {
+    int grid_size = (num_cells + block_size - 1) / block_size;
+
+    //add_block_inflow_bottom_kernel<<<grid_size, block_size >>>(smoke, ResX, ResY);
+    add_block_inflow_left_kernel <<<grid_size, block_size >>> (smoke, ResX, ResY, 0.1, 1.0);
 }
 
 void FluidSolverGPU::initialize_environment() {
@@ -429,7 +476,7 @@ void FluidSolverGPU::initialize_environment() {
     for (int i = 0; i < ResX + 2; i++) {
         for (int j = 0; j < ResY + 2; j++) {
             //make the border solid
-            if (i == 0 || i == ResY + 1 || j==0 || j==ResX+1) {
+            if ( i == 2 || i == ResY-1) {
                 solid_map_host[i * (ResX + 2) + j] = true;
             }
             else
@@ -438,9 +485,11 @@ void FluidSolverGPU::initialize_environment() {
             }
 
             //draw sphere obstical in the center
-            /*if (std::pow((i - RESY / 2), 2) + std::pow((j - RESX / 2), 2) < 50) {
-                solid_map[i][j] = true;
-            }*/
+            Vec2 offset(-ResX/4, 0);
+            float radius = (ResX / 8);
+            if (std::pow((i - ResY / 2 - offset.y), 2) + std::pow((j - ResX / 2- offset.x), 2) < radius*radius) {
+                solid_map_host[i*(ResX+2)+j] = true;
+            }
         }
     }
 
@@ -495,21 +544,42 @@ void FluidSolverGPU::compute_divergence() {
 
 //Solver Functions
 void FluidSolverGPU::solve_smoke() {
-
-    add_temperature_inflow();
+    //add_temperature_inflow();
+    add_smoke_inflow();
 
     //simulation steps
     advect_quantities();
     add_external_force();
     project();
+    determine_time_step();
 
     compute_divergence();
     construct_velocity_center();
     //copy memory to show on CPU
     cudaMemcpy(host_vector_field, vel_center, host_vector_field_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(host_field, temperature, host_field_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost);
 }
 
+void FluidSolverGPU::determine_time_step()
+{
+    //find max and min velocity
+    float* max_iterX = thrust::max_element(thrust::device, velX, velX+ (ResX + 1) * ResY);
+    float* max_iterY = thrust::max_element(thrust::device, velY, velY + ResX * (ResY+1));
+
+    // Copy the result back to host
+    float max_velX = 0.0f;
+    cudaMemcpy(&max_velX, max_iterX, sizeof(float), cudaMemcpyDeviceToHost);
+    float max_velY = 0.0f;
+    cudaMemcpy(&max_velY, max_iterY, sizeof(float), cudaMemcpyDeviceToHost);
+
+    Vec2 u_max(std::abs(max_velX), std::abs(max_velY));
+    if (u_max.length() == 0.0) {
+        dt = 1e-9;
+    }
+    else {
+        dt = (0.1 * 5 * dx) / u_max.length(); //dt should be smaller tan 5*dx/umax
+    }
+}
 
 void FluidSolverGPU::advect_quantities() {
     /*
@@ -544,7 +614,11 @@ void FluidSolverGPU::add_external_force() {
     int number_of_cells = ResX * (ResY+1);
     int grid_size = (number_of_cells + block_size - 1) / block_size;
 
-    add_external_force_kernel<<<grid_size, block_size>>>(velY, smoke, temperature, ResX, ResY, gravity, dt, density_alpha, bouyancy, T_amb);
+    //smoke case
+    //add_external_force_smoke_kernel <<<grid_size, block_size>>>(velY, smoke, temperature, ResX, ResY, gravity, dt, density_alpha, bouyancy, T_amb);
+
+    //wind tunnel case
+    add_external_force_wind_tunel_kernel <<<grid_size, block_size>>> (velX, ResX, ResY, wind_force);
 }
 
 void FluidSolverGPU::project() {
@@ -596,6 +670,13 @@ std::vector<unsigned char> FluidSolverGPU::scalar_field_to_bytes(float normalize
     //set the velocity values into the bytes
     for (int i = ResY - 1; i >= 0; i--) {
         for (int j = 0; j < ResX; j++) {
+            //handle the solid blocks
+            if (solid_map[(i + 1) * (ResX + 2) + (j + 1)]) {
+                bytes.push_back(0.0);
+                bytes.push_back(0.0);
+                bytes.push_back(255.0);
+                continue;
+            }
 
             //Color mapping for velX into vel_bytes (RGB) ---
             // t in [-1, 1]: negative -> blue, positive -> red
@@ -636,7 +717,6 @@ std::vector<unsigned char> FluidSolverGPU::scalar_field_to_bytes(float normalize
 
     return bytes;
 }
-
 
 std::vector<unsigned char> FluidSolverGPU::vector_field_to_bytes() {
     /*
@@ -704,6 +784,7 @@ FluidSolverGPU::~FluidSolverGPU() {
     cudaFree(divergence);
     cudaFree(solid_map);
     cudaFree(air_map);
+    cudaFree(scene_bytes);
 
     free(host_field);
     free(host_vector_field);

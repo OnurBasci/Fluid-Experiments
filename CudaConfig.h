@@ -2,11 +2,11 @@
 
 // Make a macro that is __host__ __device__ only when compiled with NVCC
 #ifdef __CUDACC__
-	#define HD __host__ __device__
-	#define H __host__
-	#define D __device__
+	#define CUDA_HD __host__ __device__
+	#define CUDA_H __host__
+	#define CUDA_D __device__
 #else
-	#define HD
-	#define H
-	#define D
+	#define CUDA_HD
+	#define CUDA_H
+	#define CUDA_D
 #endif

@@ -1,7 +1,6 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <filesystem>
-
 #include "shader.h"
 #include "stb_image.h"
 #include "Texture.h"
@@ -100,11 +99,22 @@ int main()
 
     // load and create a texture 
     // -------------------------
-    //FluidSolver fluid_solver;
-    FluidSolverGPU fluid_solverGPU;
 
-    Texture texture1(fluid_solverGPU.scalar_field_to_bytes(100.0), fluid_solverGPU.ResX, fluid_solverGPU.ResY, 3, "texture1", 0);
-    texture1.texUnit(ourShader, "texture1", 0);
+    bool use_gpu = true;
+
+    FluidSolverGPU fluid_solverGPU;
+    FluidSolver fluid_solver;
+
+    Texture* texture1 = nullptr;
+    if (use_gpu) {
+        Texture tex(fluid_solverGPU.scalar_field_to_bytes(1.0), fluid_solverGPU.ResX, fluid_solverGPU.ResY, 3, "texture1", 0);
+        texture1 = &tex;
+    }
+    else {
+        Texture tex(fluid_solver.scene_bytes, fluid_solver.resX, fluid_solver.resY, 3, "texture1", 0);
+        texture1 = &tex;
+    }
+    texture1->texUnit(ourShader, "texture1", 0);
 
     // render loop
     // -----------
@@ -124,8 +134,13 @@ int main()
         auto start = std::chrono::high_resolution_clock::now();
 
         //solver loop
-        //fluid_solver.solve_smoke();
-        fluid_solverGPU.solve_smoke();
+        if (use_gpu) {
+            fluid_solverGPU.solve_smoke();
+        }
+        else
+        {
+            fluid_solver.solve_smoke_wind_tunnel();
+        }
 
         auto end = std::chrono::high_resolution_clock::now();
         double ms = std::chrono::duration<double, std::milli>(end - start).count();
@@ -141,10 +156,14 @@ int main()
         }
 
         // render fluid
-        texture1.Bind();
-        //texture1.update_texture_data(fluid_solver.array_to_bytes(fluid_solver.smoke, 1.0));
-        texture1.update_texture_data(fluid_solverGPU.scalar_field_to_bytes(100.0));
-        //texture1.update_texture_data(fluid_solver.scene_bytes);
+        texture1->Bind();
+        if (use_gpu) {
+            texture1->update_texture_data(fluid_solverGPU.scalar_field_to_bytes(1.0));
+        }
+        else {
+            texture1->update_texture_data(fluid_solver.scene_bytes);
+        }
+
         ourShader.use();
         glBindVertexArray(VAO);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);

@@ -8,8 +8,8 @@
 
 #define CLAMP(x, a, b) (( (x) < (a) ) ? (a) : ( ((x) > (b)) ? (b) : (x) ))
 
-constexpr int RESXGPU = 500;
-constexpr int RESYGPU = 500;
+constexpr int RESXGPU = 400;
+constexpr int RESYGPU = 400;
 
 class FluidSolverGPU {
 public:
@@ -17,15 +17,16 @@ public:
 	int ResY;
 
 	//parameters
-	float dt=0.001;
+	float dt=0.0005;
 	float dt_coeff = 20;
 	float dx = 1.0 / RESXGPU; //I suppose the fluid is in range [0,1][0,1]
 	float density = 1.0;
 	float gravity = 9.81;
-	float bouyancy = 1.0;
-	float density_alpha = 1.0; //coefficient for smoke external force
+	float bouyancy = 2.0;
+	float density_alpha = 0.0; //coefficient for smoke external force
 	float T_amb = 20.0;
 	float T_incoming = 70.0;
+	float wind_force = 4.0;
 	int jacobi_iteration = 100;
 
 	//fields
@@ -41,6 +42,7 @@ public:
 	float* temperature;
 	float* swap_temperature;
 	float* divergence;
+	float* scene_bytes; //bytes to render at each frame
 	unsigned char* solid_map;
 	unsigned char* air_map;
 
@@ -59,8 +61,10 @@ public:
 	void initialize_fields();
 	void initialize_environment();
 	void add_temperature_inflow();
+	void add_smoke_inflow();
 
 	//solver functions
+	void determine_time_step();
 	void solve_smoke();
 	void advect_quantities();
 	void add_external_force();

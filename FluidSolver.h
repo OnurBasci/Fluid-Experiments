@@ -32,6 +32,7 @@ public:
 	float density_alpha = 1.0; //coefficient for smoke external force
 	float T_amb = 20.0;
 	float T_incoming = 70.0;
+	float wind_force = 4.0;
 
 	//staggered grid with array for x and y
 	Field2D<float> velX;
@@ -68,15 +69,18 @@ public:
 	void initialize_environment();
 	void add_smoke_inflow();
 	void add_temperature_inflow();
+	void add_block_inflow(Field2D<float>& field, Vec2 center, Vec2 size, float val);
 
-	void solve_smoke();
+	void solve_smoke_temperature();
+	void solve_smoke_wind_tunnel();
     void solve();
 
 	//CPU code for the simulation
 	void determine_time_step();
 	void advect_velocity();
 	void advect_quantity(Field2D<float> &field);
-	void smoke_add_external_force();
+	void smoke_add_external_force_temperature();
+	void smoke_add_external_force_wind_tunnel();
 	void project();
 	void compute_divergence();
 	void gauss_seidel_pressure_solve();

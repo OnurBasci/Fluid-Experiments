@@ -8,101 +8,101 @@ struct Vec2
     float x, y;
 
     // --- Constructors ---
-    HD
+    CUDA_HD
     constexpr Vec2() : x(0), y(0) {}
-    HD
+    CUDA_HD
     constexpr Vec2(float x, float y) : x(x), y(y) {}
 
     // --- Basic arithmetic ---
-    HD
+    CUDA_HD
     constexpr Vec2 operator+(const Vec2& other) const {
         return { x + other.x, y + other.y };
     }
 
-    HD
+    CUDA_HD
     constexpr Vec2 operator-(const Vec2& other) const {
         return { x - other.x, y - other.y };
     }
 
-    HD
+    CUDA_HD
     constexpr Vec2 operator*(float scalar) const {
         return { x * scalar, y * scalar };
     }
 
-    HD
+    CUDA_HD
     constexpr Vec2 operator/(float scalar) const {
         return { x / scalar, y / scalar };
     }
 
     // Compound assignments
-    HD
+    CUDA_HD
     Vec2& operator+=(const Vec2& other) {
         x += other.x; y += other.y;
         return *this;
     }
 
-    HD
+    CUDA_HD
     Vec2& operator-=(const Vec2& other) {
         x -= other.x; y -= other.y;
         return *this;
     }
 
-    HD
+    CUDA_HD
     Vec2& operator*=(float scalar) {
         x *= scalar; y *= scalar;
         return *this;
     }
 
-    HD
+    CUDA_HD
     Vec2& operator/=(float scalar) {
         x /= scalar; y /= scalar;
         return *this;
     }
 
     // --- Dot product ---
-    HD
+    CUDA_HD
     constexpr float dot(const Vec2& other) const {
         return x * other.x + y * other.y;
     }
 
     // --- Magnitude ---
-    HD
+    CUDA_HD
     float length() const {
         return std::sqrt(x * x + y * y);
     }
 
-    HD
+    CUDA_HD
     float lengthSquared() const {
         return x * x + y * y;
     }
 
     // --- Normalization ---
-    HD
+    CUDA_HD
     Vec2 normalized() const {
         float len = length();
         return (len == 0.0f) ? Vec2(0, 0) : Vec2(x / len, y / len);
     }
 
-    HD
+    CUDA_HD
     void normalize() {
         float len = length();
         if (len != 0.0f) { x /= len; y /= len; }
     }
 
     // --- Comparison ---
-    HD
+    CUDA_HD
     constexpr bool operator==(const Vec2& other) const {
         return x == other.x && y == other.y;
     }
 
-    HD
+    CUDA_HD
     constexpr bool operator!=(const Vec2& other) const {
         return !(*this == other);
     }
 };
 
 // Optional: scalar * vector (commutative multiply)
-HD
+CUDA_HD
 inline Vec2 operator*(float scalar, const Vec2& v) {
     return { v.x * scalar, v.y * scalar };
 }

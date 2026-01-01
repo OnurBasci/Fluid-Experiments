@@ -18,8 +18,9 @@ temperature(RESY, RESX), solid_map(RESY + 2, RESX + 2), air_map(RESY + 2, RESX +
 
     //initialize_sinusoidal_vel_field(2, 1);
 
-    initialize_smoke_field();
-    initialize_temperature_field();
+    //initialize_smoke_field();
+    add_block_inflow(smoke, Vec2(resX / 2 - resX / 3, resY / 2), Vec2(resX / 32, resY / 8), 1.0);
+    //initialize_temperature_field();
     initialize_environment();
 
 	construct_vel_center();
@@ -27,17 +28,31 @@ temperature(RESY, RESX), solid_map(RESY + 2, RESX + 2), air_map(RESY + 2, RESX +
     set_velocity_bytes();
 }
 
-void FluidSolver::solve_smoke() {
+void FluidSolver::solve_smoke_temperature() {
     update_scene(VisualizeField::Divergence);
-    add_smoke_inflow();
+    add_block_inflow(smoke, Vec2(resX / 2 - resX / 3, resY / 2), Vec2(resX / 32, resY / 8), 1.0);
     add_temperature_inflow();
     determine_time_step();
     advect_quantity(smoke);
     advect_quantity(temperature);
     advect_velocity();
-    smoke_add_external_force();
+    smoke_add_external_force_temperature();
     project();
     
+    construct_vel_center();
+    set_velocity_bytes();
+}
+
+void FluidSolver::solve_smoke_wind_tunnel() {
+    update_scene(VisualizeField::Divergence);
+    //add_smoke_inflow();
+    add_block_inflow(smoke, Vec2(resX/2-resX/3, resY/2), Vec2(resX/32, resY/8), 1.0);
+    determine_time_step();
+    advect_quantity(smoke);
+    advect_velocity();
+    smoke_add_external_force_wind_tunnel();
+    project();
+
     construct_vel_center();
     set_velocity_bytes();
 }
@@ -94,6 +109,12 @@ void FluidSolver::update_scene(VisualizeField field_type=VisualizeField::Smoke) 
                     cg = static_cast<unsigned char>(g * 255.0f);
                     cb = static_cast<unsigned char>(b * 255.0f);
                     break;
+                case VisualizeField::VelocityMagnitude:
+                    value = vel_center(i,j).length() / 1.0; // maxAbsX;
+                    value = std::min(1.0f, value);
+                    cr = static_cast<unsigned char>(value * 255.0f);
+                    cg = static_cast<unsigned char>(value * 255.0f);
+                    cb = static_cast<unsigned char>(value * 255.0f);
                 default:
                     break;
                 }
@@ -129,7 +150,8 @@ void FluidSolver::determine_time_step() {
     }
 
     umax = umax + std::sqrt(5 * dx * gravity);
-    dt =dt_coeff *  0.5 * 5 * dx / umax;
+    //dt =dt_coeff *  0.5 * 5 * dx / umax;
+    dt = 0.0005;
 }
 
 void FluidSolver::advect_velocity() {
@@ -151,7 +173,7 @@ void FluidSolver::advect_velocity() {
                 vy = (velY(i, j - 1) + velY(i + 1, j - 1) + velY(i, j) + velY(i + 1, j)) / 4.0;
             //get the velocity vector at U_i+1/2, j
             float vx = velX(i, j);
-            Vec2 dir(vx, -vy); //velocity in index coordinates
+            Vec2 dir(vx*resX, -vy*resY); //velocity in index coordinates
 
             //Semi lagrangian advection
             Vec2 prev_pos = Vec2(static_cast<float>(j), static_cast<float>(i)) - dt * dir;
@@ -163,7 +185,6 @@ void FluidSolver::advect_velocity() {
     std::swap(velX, velX_temp);
 
     //update velY
-
     for (int i = 0; i < resY+1; i++) {
         for (int j = 0; j < resX; j++) {
             //interpolalate vel y at i+1/2,j
@@ -176,7 +197,7 @@ void FluidSolver::advect_velocity() {
                 vx = (velX(i-1, j) + velX(i-1, j+1) + velX(i, j) + velX(i, j+1)) / 4.0;
             //get the velocity vector at U_i+1/2, j
             float vy = velY(i, j);
-            Vec2 dir(vx, -vy); //velocity in index coordinates
+            Vec2 dir(vx*resX, -vy*resY); //velocity in index coordinates
 
             //Semi lagrangian advection
             Vec2 prev_pos = Vec2(static_cast<float>(j), static_cast<float>(i)) - dt * dir;
@@ -193,7 +214,7 @@ void FluidSolver::advect_quantity(Field2D<float> &field) {
             float vx = (velX(i, j) + velX(i, j + 1)) / 2;
             float vy = (velY(i, j) + velY(i, j + 1)) / 2;
 
-            Vec2 dir(vx, -vy); //velocity in index coordinates
+            Vec2 dir(vx*resX, -vy*resY); //velocity in index coordinates
 
             //Semi lagrangian advection
             Vec2 prev_pos = Vec2(static_cast<float>(j), static_cast<float>(i)) - dt * dir;
@@ -202,7 +223,7 @@ void FluidSolver::advect_quantity(Field2D<float> &field) {
     }
 }
 
-void FluidSolver::smoke_add_external_force() {
+void FluidSolver::smoke_add_external_force_temperature() {
     /*
     We approximate the smokes movment due to the temperature change via approximative bouyancy force
     */
@@ -212,6 +233,17 @@ void FluidSolver::smoke_add_external_force() {
             float bouyouncy_force = -density_alpha * sample_quantity(smoke, Vec2(j, i - 0.5)) + bouyancy * (sample_quantity(temperature, Vec2(j, i-0.5)) - T_amb);
             float g_force = -gravity;
             velY(i, j) += dt * (bouyouncy_force+gravity);
+        }
+    }
+}
+
+void FluidSolver::smoke_add_external_force_wind_tunnel() {
+    for (int i = 0; i < RESY; i++) {
+        for (int j = 0; j < RESX+1; j++) {
+            
+            if (j == 8) {
+                velX(i, j) = wind_force;
+            }
         }
     }
 }
@@ -278,8 +310,6 @@ void FluidSolver::update_incompressible_velocity() {
     //update velX
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX+1; j ++) {
-            //continue if a solid cell
-            if (solid_map(i + 1,j + 1)) continue;
 
             //get solid and air cells
             int sl = solid_map(i + 1,j); int sr = solid_map(i + 1,j + 1);
@@ -387,24 +417,6 @@ void FluidSolver::initialize_sinusoidal_vel_field(float frequency, float amplitu
     }
 }
 
-void FluidSolver::initialize_smoke_field() {
-    /*
-    set an initial smoke density field
-    */
-
-    for (int i = 0; i < RESY; i++) {
-        for (int j = 0; j < RESX; j++) {
-            if (std::pow((i - RESY/2),2) + std::pow((j - RESX/2), 2) < 100) {
-                smoke(i,j) = 1.0;
-            }
-            else
-            {
-                smoke(i,j) = 0.0;
-            }
-        }
-    }
-}
-
 void FluidSolver::initialize_environment() {
     /*
     Sets the air and solid cells
@@ -412,13 +424,14 @@ void FluidSolver::initialize_environment() {
     //solid cells
     for (int i = 0; i < RESX + 2; i++) {
         for (int j = 0; j < RESY+2;j++) {
-            //make the border solid
-            if (i == 0 || i == RESY + 1 || j == 0 || j == RESX + 1) {
-                solid_map(i,j) = true;
+            //mark the border solid
+            if (i == 2|| i == RESY-1) {
+                solid_map(i,j) = false;
             }
 
             //draw sphere obstical in the center
-            /*if (std::pow((i - RESY / 2), 2) + std::pow((j - RESX / 2), 2) < 50) {
+            /*float obstacle_radius = (resX / 8) * (resX / 8);
+            if (std::pow((i - RESY / 2), 2) + std::pow((j - RESX / 2), 2) < obstacle_radius) {
                 solid_map[i][j] = true;
             }*/
         }
@@ -426,8 +439,8 @@ void FluidSolver::initialize_environment() {
     //air cells
     for (int i = 0; i < RESX + 2; i++) {
         for (int j = 0; j < RESY + 2; j++) {
-            //make the border air
-            
+            //mark the border air
+            if (solid_map(i, j)) continue;
             if (i == 0 || i == RESY + 1 || j == 0 || j == RESX + 1) {
                 air_map(i,j) = true;
             }
@@ -436,15 +449,15 @@ void FluidSolver::initialize_environment() {
     }
 }
 
-void FluidSolver::add_smoke_inflow() {
+void FluidSolver::add_block_inflow(Field2D<float>& field, Vec2 center, Vec2 size, float val) {
     /*
-    adds constant flow to the scene
+    add values to a given field in a given region
     */
 
-    for (int i = 0; i < RESY; i++) {
-        for (int j = 0; j < RESX; j++) {
-            if (std::pow((i - RESY / 2 - 30), 2) + std::pow((j - RESX / 2), 2) < 100) {
-                smoke(i,j) = 1.0;
+    for (int i = 0; i < resY; i++) {
+        for (int j = 0; j < resX; j++) {
+            if (i > center.y - size.y/2.0 && i < center.y + size.y/2.0 && j > center.x - size.x/2.0 && j < center.x + size.x/2.0) {
+                field[i][j] = val;
             }
         }
     }
@@ -457,7 +470,7 @@ void FluidSolver::initialize_temperature_field() {
 
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
-            if (i > RESY - 8 && i < RESY - 1 && j > RESX / 2 - RESX / 6 && j < RESX / 2 + RESX / 6) {
+            if (i > RESY - 8 && i < RESY - 2 && j > RESX / 2 - RESX / 6 && j < RESX / 2 + RESX / 6) {
                 temperature(i,j) = T_incoming;
             }
             else
@@ -475,7 +488,7 @@ void FluidSolver::add_temperature_inflow() {
 
     for (int i = 0; i < RESY; i++) {
         for (int j = 0; j < RESX; j++) {
-            if (i > RESY - 8 && i < RESY - 1 && j > RESX / 2 - RESX / 6 && j < RESX / 2 + RESX / 6) {
+            if (i > RESY - 8 && i < RESY - 2 && j > RESX / 2 - RESX / 6 && j < RESX / 2 + RESX / 6) {
                 temperature(i,j) = 70.0;
             }
         }
