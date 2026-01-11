@@ -4,18 +4,8 @@
 #include "Vec2.h"
 #include "Field2D.h"
 #include "CudaConfig.h"
-
-const int RESX = 100;
-const int RESY = 100;
-
-enum class VisualizeField {
-	Smoke,
-	Temperature,
-	VelocityMagnitude,
-	Pressure,
-	Divergence,
-	Vorticity
-};
+#include "VisualizeField.h"
+#include "FluidConfig.h"
 
 class FluidSolver {
 public:

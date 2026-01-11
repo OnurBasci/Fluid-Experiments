@@ -8,6 +8,12 @@
 #include "FluidSolver.h"
 #include "File.cuh"
 #include "FluidSolverGPU.cuh"
+#include "VisualizeField.h"
+#include "FieldInitializer.h"
+
+#include "imgui.h"
+#include"imgui_impl_glfw.h"
+#include"imgui_impl_opengl3.h"
 
 #include <iostream>
 
@@ -64,10 +70,10 @@ int main()
     // ------------------------------------------------------------------
     float vertices[] = {
         // positions          // colors           // texture coords
-         0.9f,  0.9f, 0.0f,   1.0f, 0.0f, 0.0f,   1.0f, 1.0f, // top right
-         0.9f, -0.9f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, // bottom right
-        -0.9f, -0.9f, 0.0f,   0.0f, 0.0f, 1.0f,   0.0f, 0.0f, // bottom left
-        -0.9f,  0.9f, 0.0f,   1.0f, 1.0f, 0.0f,   0.0f, 1.0f  // top left 
+         1.0f,  1.0f, 0.0f,   1.0f, 0.0f, 0.0f,   1.0f, 1.0f, // top right
+         1.0f, -1.0f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, // bottom right
+        -1.0f, -1.0f, 0.0f,   0.0f, 0.0f, 1.0f,   0.0f, 0.0f, // bottom left
+        -1.0f,  1.0f, 0.0f,   1.0f, 1.0f, 0.0f,   0.0f, 1.0f  // top left 
     };
     unsigned int indices[] = {
         0, 1, 3, // first triangle
@@ -104,6 +110,12 @@ int main()
 
     FluidSolverGPU fluid_solverGPU;
     FluidSolver fluid_solver;
+    int field_index = 0; //index of the field to show
+    bool simulation_started=false;
+    float brush_size = 5.0;
+
+    //initialize field
+    FieldInitializer fieldInitializer(fluid_solverGPU);
 
     Texture* texture1 = nullptr;
     if (use_gpu) {
@@ -115,6 +127,14 @@ int main()
         texture1 = &tex;
     }
     texture1->texUnit(ourShader, "texture1", 0);
+
+    //setup IMGUI
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 330");
+
 
     // render loop
     // -----------
@@ -129,17 +149,27 @@ int main()
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
+        //set new Imgui frame
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
 
         //check the solver loop time
         auto start = std::chrono::high_resolution_clock::now();
 
         //solver loop
-        if (use_gpu) {
-            fluid_solverGPU.solve_smoke();
-        }
-        else
-        {
-            fluid_solver.solve_smoke_wind_tunnel();
+        if (simulation_started) {
+            if (use_gpu) {
+                //set the current field
+                VisualizeField current_field = static_cast<VisualizeField>(field_index);
+                fluid_solverGPU.show_field_type = current_field;
+                fluid_solverGPU.solve_smoke();
+            }
+            else
+            {
+                fluid_solver.solve_smoke_wind_tunnel();
+            }
         }
 
         auto end = std::chrono::high_resolution_clock::now();
@@ -168,11 +198,39 @@ int main()
         glBindVertexArray(VAO);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
+        //create a UI window
+        ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Simulation Parameters");
+        ImGui::Text("Visualization field");
+        ImGui::RadioButton("Smoke", &field_index, 0);
+        ImGui::RadioButton("Pressure", &field_index, 1);
+        ImGui::RadioButton("Divergence", &field_index, 2);
+        if (ImGui::DragFloat("brush size", &brush_size, 1.0, 5.0, 50.0)) {
+            fieldInitializer.brush_size = brush_size;
+        }
+        if (ImGui::Button("Wind Tunnel State")) {
+            fieldInitializer.set_wind_tunnel();
+        }
+        if (ImGui::Button("Start Simulation")) {
+            simulation_started = true;
+        }
+        fieldInitializer.update_solid_map_by_mouse_interaction();
+        ImGui::End();
+
+        //render UI
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
+
+    //end Imgui
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
 
     // optional: de-allocate all resources once they've outlived their purpose:
     // ------------------------------------------------------------------------

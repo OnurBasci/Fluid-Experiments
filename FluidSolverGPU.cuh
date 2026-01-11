@@ -5,11 +5,11 @@
 //#include <math_functions.h>
 #include <device_launch_parameters.h>
 #include <iostream>
+#include "VisualizeField.h"
+#include "FluidConfig.h"
+#include "CudaConfig.h"
 
 #define CLAMP(x, a, b) (( (x) < (a) ) ? (a) : ( ((x) > (b)) ? (b) : (x) ))
-
-constexpr int RESXGPU = 400;
-constexpr int RESYGPU = 400;
 
 class FluidSolverGPU {
 public:
@@ -45,6 +45,7 @@ public:
 	float* scene_bytes; //bytes to render at each frame
 	unsigned char* solid_map;
 	unsigned char* air_map;
+	VisualizeField show_field_type;
 
 	float* host_field;
 	Vec2* host_vector_field;
@@ -62,6 +63,8 @@ public:
 	void initialize_environment();
 	void add_temperature_inflow();
 	void add_smoke_inflow();
+	void set_solid_map_on_GPU(const unsigned char* s_map);
+	void set_air_map_on_GPU(const unsigned char* a_map);
 
 	//solver functions
 	void determine_time_step();
