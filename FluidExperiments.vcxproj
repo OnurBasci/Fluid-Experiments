@@ -172,6 +172,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CudaConfig.h" />
+    <ClInclude Include="DrawField.h" />
     <ClInclude Include="Field2D.h" />
     <ClInclude Include="FieldInitializer.h" />
     <ClInclude Include="FluidConfig.h" />

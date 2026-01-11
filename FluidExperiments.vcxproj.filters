@@ -134,6 +134,9 @@
     <ClInclude Include="FluidConfig.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DrawField.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="vertex.vs">

@@ -110,7 +110,8 @@ int main()
 
     FluidSolverGPU fluid_solverGPU;
     FluidSolver fluid_solver;
-    int field_index = 0; //index of the field to show
+    int show_field_index = 0; //index of the field to show
+    int draw_field_index = 0;
     bool simulation_started=false;
     float brush_size = 5.0;
 
@@ -162,7 +163,7 @@ int main()
         if (simulation_started) {
             if (use_gpu) {
                 //set the current field
-                VisualizeField current_field = static_cast<VisualizeField>(field_index);
+                VisualizeField current_field = static_cast<VisualizeField>(show_field_index);
                 fluid_solverGPU.show_field_type = current_field;
                 fluid_solverGPU.solve_smoke();
             }
@@ -170,6 +171,10 @@ int main()
             {
                 fluid_solver.solve_smoke_wind_tunnel();
             }
+        }
+        else {
+            //draw environment
+            fieldInitializer.setup_environment_by_mouse_interaction(static_cast<DrawField>(draw_field_index));
         }
 
         auto end = std::chrono::high_resolution_clock::now();
@@ -188,6 +193,7 @@ int main()
         // render fluid
         texture1->Bind();
         if (use_gpu) {
+            fluid_solverGPU.set_host_field();
             texture1->update_texture_data(fluid_solverGPU.scalar_field_to_bytes(1.0));
         }
         else {
@@ -201,11 +207,17 @@ int main()
         //create a UI window
         ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_FirstUseEver);
         ImGui::Begin("Simulation Parameters");
+        //Set Visualization Field
         ImGui::Text("Visualization field");
-        ImGui::RadioButton("Smoke", &field_index, 0);
-        ImGui::RadioButton("Pressure", &field_index, 1);
-        ImGui::RadioButton("Divergence", &field_index, 2);
-        if (ImGui::DragFloat("brush size", &brush_size, 1.0, 5.0, 50.0)) {
+        ImGui::RadioButton("Smoke##show", &show_field_index, 0);
+        ImGui::RadioButton("Pressure", &show_field_index, 1);
+        ImGui::RadioButton("Divergence", &show_field_index, 2);
+        //Set Drawing Field
+        ImGui::Text("Draw Field");
+        ImGui::Checkbox("add constant flow", &fieldInitializer.add_constant_inflow);
+        ImGui::RadioButton("Smoke##draw", &draw_field_index, 0);
+        ImGui::RadioButton("Solid", &draw_field_index, 1);
+        if (ImGui::DragFloat("brush size", &brush_size, 1.0, 1.0, 50.0)) {
             fieldInitializer.brush_size = brush_size;
         }
         if (ImGui::Button("Wind Tunnel State")) {
@@ -214,7 +226,10 @@ int main()
         if (ImGui::Button("Start Simulation")) {
             simulation_started = true;
         }
-        fieldInitializer.update_solid_map_by_mouse_interaction();
+        if (ImGui::Button("Restart Simulation")) {
+            fieldInitializer.reset_field();
+            simulation_started = false;
+        }
         ImGui::End();
 
         //render UI

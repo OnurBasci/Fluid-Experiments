@@ -138,6 +138,24 @@ void add_block_inflow_left_kernel(float* field, int resX, int resY, float range,
 }
 
 __global__
+void add_block_inflow_from_map(float* field, unsigned char* inflow_map, int resX, int resY, float val) {
+    /*
+    range [0,1] if 1 all the left covered
+    */
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    int num_cells = resX * resY;
+    if (idx >= num_cells) return;
+
+    int i = idx / resX;
+    int j = idx % resX;
+
+    int center = resX / 2;
+
+    field[i * resX + j] = inflow_map[i * resX + j] ? val : field[i * resX + j];
+}
+
+__global__
 void advect_velocityX_kernel(float* velX, float* velX_temp, float* velY, int resX, int resY, float dt) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -417,6 +435,7 @@ FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX*
     CUDA_CHECK(cudaMallocManaged(&air_map, (ResY+2)*(ResX+2) * sizeof(char)));
     CUDA_CHECK(cudaMallocManaged(&solid_map, (ResY+2) * (ResX+2) * sizeof(char)));
     CUDA_CHECK(cudaMalloc(&scene_bytes, (ResY * ResX) * sizeof(float)));
+    CUDA_CHECK(cudaMallocManaged(&smoke_inflow_map, ResY * ResX * sizeof(char)));
 
     //initialize cpu memory
     host_field_size = ResX * ResY * sizeof(float);
@@ -424,7 +443,7 @@ FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX*
     host_field = (float*)malloc(host_field_size);
     host_vector_field = (Vec2*)malloc(host_vector_field_size);
 
-    initialize_fields();
+    //initialize_fields();
     //initialize_environment();
     construct_velocity_center();
 
@@ -463,7 +482,8 @@ void FluidSolverGPU::add_smoke_inflow() {
     int grid_size = (num_cells + block_size - 1) / block_size;
 
     //add_block_inflow_bottom_kernel<<<grid_size, block_size >>>(smoke, ResX, ResY);
-    add_block_inflow_left_kernel <<<grid_size, block_size >>> (smoke, ResX, ResY, 0.1, 1.0);
+    //add_block_inflow_left_kernel <<<grid_size, block_size >>> (smoke, ResX, ResY, 0.1, 1.0);
+    add_block_inflow_from_map <<<grid_size, block_size >>> (smoke, smoke_inflow_map, ResX, ResY, 1.0);
 }
 
 void FluidSolverGPU::initialize_environment() {
@@ -540,6 +560,22 @@ void FluidSolverGPU::set_air_map_on_GPU(const unsigned char* a_map) {
     cudaMemcpy(air_map, a_map, map_size, cudaMemcpyHostToDevice);
 }
 
+void FluidSolverGPU::set_smoke_field_on_GPU(const float* smoke_field) {
+    size_t map_size = (ResX) * (ResY) * sizeof(float);
+    cudaMemcpy(smoke, smoke_field, map_size, cudaMemcpyHostToDevice);
+}
+
+void FluidSolverGPU::set_smoke_inflow_map_on_GPU(const unsigned char* s_inflow_map) {
+    size_t map_size = (ResX) * (ResY) * sizeof(char);
+    cudaMemcpy(smoke_inflow_map, s_inflow_map, map_size, cudaMemcpyHostToDevice);
+}
+
+void FluidSolverGPU::set_vel_field_on_GPU(const float* vX, const float* vY) {
+    size_t map_size = (ResX+1) * (ResY) * sizeof(float);
+    cudaMemcpy(velX, vX, map_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(velY, vY, map_size, cudaMemcpyHostToDevice);
+}
+
 void FluidSolverGPU::construct_velocity_center() {
     int grid_size = (num_cells + block_size - 1) / block_size;
 
@@ -565,30 +601,13 @@ void FluidSolverGPU::solve_smoke() {
 
     compute_divergence();
     construct_velocity_center();
-
-    //copy memory to show on CPU
-    switch (show_field_type)
-    {
-    case VisualizeField::Smoke:
-        cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost);
-        break;
-    case VisualizeField::Pressure:
-        cudaMemcpy(host_field, pressure_new, host_field_size, cudaMemcpyDeviceToHost);
-        break;
-    case VisualizeField::Divergence:
-        cudaMemcpy(host_field, divergence, host_field_size, cudaMemcpyDeviceToHost);
-        break;
-    default:
-        cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost);
-        break;
-    }
-    cudaMemcpy(host_vector_field, vel_center, host_vector_field_size, cudaMemcpyDeviceToHost);
 }
 
+//SIMULATION FUNCTIONS
 void FluidSolverGPU::determine_time_step()
 {
     //find max and min velocity
-    float* max_iterX = thrust::max_element(thrust::device, velX, velX+ (ResX + 1) * ResY);
+    float* max_iterX = thrust::max_element(thrust::device, velX, velX + (ResX + 1) * ResY);
     float* max_iterY = thrust::max_element(thrust::device, velY, velY + ResX * (ResY+1));
 
     // Copy the result back to host
@@ -664,7 +683,27 @@ void FluidSolverGPU::project() {
     make_velY_incompressible <<<grid_size, block_size>>> (velY, pressure_new, solid_map, air_map, ResX, ResY, dx, dt, density);
 }
 
-//Visualization Helper
+//VISUALIZATION FUNCTIONS
+void FluidSolverGPU::set_host_field() {
+    //copy memory to show on CPU
+    switch (show_field_type)
+    {
+    case VisualizeField::Smoke:
+        cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost);
+        break;
+    case VisualizeField::Pressure:
+        cudaMemcpy(host_field, pressure_new, host_field_size, cudaMemcpyDeviceToHost);
+        break;
+    case VisualizeField::Divergence:
+        cudaMemcpy(host_field, divergence, host_field_size, cudaMemcpyDeviceToHost);
+        break;
+    default:
+        cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost);
+        break;
+    }
+    cudaMemcpy(host_vector_field, vel_center, host_vector_field_size, cudaMemcpyDeviceToHost);
+}
+
 std::vector<unsigned char> FluidSolverGPU::scalar_field_to_bytes(float normalize_factor = 1.0) {
     /*
     Transforms an array into bytes with a color mapping for visualization
@@ -703,36 +742,40 @@ std::vector<unsigned char> FluidSolverGPU::scalar_field_to_bytes(float normalize
                 continue;
             }
 
-            //Color mapping for velX into vel_bytes (RGB) ---
-            // t in [-1, 1]: negative -> blue, positive -> red
             float t = host_field[i* RESXGPU +j] / normalize_factor; // maxAbsX;
             t = std::max(-1.0f, std::min(1.0f, t));
 
             float r = 0.0f, g = 0.0f, b = 0.0f;
-            if (t > 0.0f) {
-                // positive: black -> red
-                r = t;          
-                g = 0.0f;
-                b = 0.0f;
-            }
-            else if (t < 0.0f) {
-                // negative: black -> blue
-                r = 0.0f;
-                g = 0.0f;
-                b = -t;         // t in [-1,0] -> 1..0
-            }
-            else {
-                // exactly zero: black
-                r = g = b = 0.0f;
+            
+            switch (show_field_type)
+            {
+            case VisualizeField::Smoke:
+                apply_gray_map(t, r, g, b);
+                break;
+            case VisualizeField::Pressure:
+                apply_red_blue_map(t, r, g, b);
+                break;
+            case VisualizeField::Divergence:
+                apply_red_blue_map(t, r, g, b);
+                break;
+            case VisualizeField::Temperature:
+                apply_red_blue_map(t, r, g, b);
+                break;
+            case VisualizeField::VelocityMagnitude:
+                apply_gray_map(t, r, g, b);
+                break;
+            case VisualizeField::Vorticity:
+                apply_red_blue_map(t, r, g, b);
+                break;
+            default:
+                apply_red_blue_map(t, r, g, b);
+                break;
             }
 
             unsigned char cr = static_cast<unsigned char>(r * 255.0f);
             unsigned char cg = static_cast<unsigned char>(g * 255.0f);
             unsigned char cb = static_cast<unsigned char>(b * 255.0f);
 
-            /*if (i == ResY / 2 && j == ResX / 2) {
-                std::cout << "CPU: " << r * 255.0f << std::endl;
-            }*/
 
             bytes.push_back(cr);
             bytes.push_back(cg);
@@ -794,6 +837,42 @@ std::vector<unsigned char> FluidSolverGPU::vector_field_to_bytes() {
     return bytes;
 }
 
+void FluidSolverGPU::apply_red_blue_map(const float val, float& r, float& g, float& b) {
+    //Color mapping for velX into vel_bytes (RGB) ---
+    // t in [-1, 1]: negative -> blue, positive -> red
+    if (val > 0.0f) {
+        // positive: black -> red
+        r = val;
+        g = 0.0f;
+        b = 0.0f;
+    }
+    else if (val < 0.0f) {
+        // negative: black -> blue
+        r = 0.0f;
+        g = 0.0f;
+        b = -val;         // t in [-1,0] -> 1..0
+    }
+    else {
+        // exactly zero: black
+        r = g = b = 0.0f;
+    }
+}
+
+void FluidSolverGPU::apply_gray_map(const float val, float& r, float& g, float& b) {
+    if (val > 0.0f) {
+        // positive: black -> red
+        r = val;
+        g = val;
+        b = val;
+    }
+    else {
+        // negative: black -> blue
+        r = 0.0f;
+        g = 0.0f;
+        b = 0.0f;
+    }
+}
+
 FluidSolverGPU::~FluidSolverGPU() {
 	cudaFree(velX);
 	cudaFree(velY);
@@ -810,6 +889,7 @@ FluidSolverGPU::~FluidSolverGPU() {
     cudaFree(solid_map);
     cudaFree(air_map);
     cudaFree(scene_bytes);
+    cudaFree(smoke_inflow_map);
 
     free(host_field);
     free(host_vector_field);

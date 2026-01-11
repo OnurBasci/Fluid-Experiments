@@ -3,13 +3,41 @@
 FieldInitializer::FieldInitializer(FluidSolverGPU& fluid_solver_gpu): resX(RESXGPU), resY(RESYGPU){
     fluidSolverGPU = &fluid_solver_gpu;
 
+    velX = (float*)malloc((resX+1)*resY*sizeof(float));
+    velY = (float*)malloc(resX*(resY+1)*sizeof(float));
+    smoke = (float*)malloc(resX*resY*sizeof(float));
 	solid_map = (unsigned char*)malloc((resY + 2) * (resX + 2) * sizeof(char));
 	air_map = (unsigned char*)malloc((resY + 2) * (resX + 2) * sizeof(char));
+    smoke_inflow_map = (unsigned char*)malloc(resY*resX * sizeof(char));
+
+    set_default_fields();
+}
+
+void FieldInitializer::set_default_fields() {
+    //set velocity fields
+    for (int i = 0; i < resY; i ++) {
+        for (int j = 0; j < resX+1; j++) {
+            velX[i * (resX+1) + j] = 0;
+        }
+    }
+
+    for (int i = 0; i < resY + 1; i++) {
+        for (int j = 0; j < resX; j++) {
+            velY[i * resX + j] = 0;
+        }
+    }
+
+    for (int i = 0; i < resY; i++) {
+        for (int j = 0; j < resX; j++) {
+            smoke[i * resX + j] = 0.0;
+            smoke_inflow_map[i * resX + j] = false;
+        }
+    }
 
     for (int i = 0; i < resY + 2; i++) {
         for (int j = 0; j < resX + 2; j++) {
             solid_map[i * (resX + 2) + j] = false;
-            //set the air map on the borders
+            //set free surface on borders
             if (i == 0 || i == resY + 1 || j == 0 || j == resX + 1) {
                 air_map[i * (resX + 2) + j] = true;
             }
@@ -21,6 +49,13 @@ FieldInitializer::FieldInitializer(FluidSolverGPU& fluid_solver_gpu): resX(RESXG
 
     fluidSolverGPU->set_solid_map_on_GPU(solid_map);
     fluidSolverGPU->set_air_map_on_GPU(air_map);
+    fluidSolverGPU->set_smoke_field_on_GPU(smoke);
+    fluidSolverGPU->set_vel_field_on_GPU(velX, velY);
+    fluidSolverGPU->set_smoke_inflow_map_on_GPU(smoke_inflow_map);
+}
+
+void FieldInitializer::reset_field() {
+    set_default_fields();
 }
 
 void FieldInitializer::set_wind_tunnel() {
@@ -45,6 +80,18 @@ void FieldInitializer::set_wind_tunnel() {
         }
     }
 
+    //set incoming smoke from left
+    for (int i = 0; i < resY; i++) {
+        for (int j = 0; j < resX; j++) {
+            int center = resX / 2;
+
+            if (j == 10 && i > center - 0.2 * center && i < center + 0.2 * center) {
+                smoke[i * resX + j] = 1.0;
+                smoke_inflow_map[i * resX + j] = true;
+            }
+        }
+    }
+
     //set air blocks
     for (int i = 0; i < resY + 2; i++) {
         for (int j = 0; j < resX + 2; j++) {
@@ -61,15 +108,17 @@ void FieldInitializer::set_wind_tunnel() {
     //set the fields to fluid simulater
     fluidSolverGPU->set_solid_map_on_GPU(solid_map);
     fluidSolverGPU->set_air_map_on_GPU(air_map);
+    fluidSolverGPU->set_smoke_inflow_map_on_GPU(smoke_inflow_map);
+    fluidSolverGPU->set_smoke_field_on_GPU(smoke);
 }
 
-void FieldInitializer::update_solid_map_by_mouse_interaction() {
+void FieldInitializer::setup_environment_by_mouse_interaction(DrawField draw_field) {
     /*
     Sets the clicked block as a solid block
     */
     ImGuiIO& io = ImGui::GetIO();
 
-    // If ImGui wants the mouse, DO NOT handle it
+    // If ImGui wants the mouse, do not handle it
     if (io.WantCaptureMouse)
         return;
 
@@ -82,9 +131,20 @@ void FieldInitializer::update_solid_map_by_mouse_interaction() {
         for (Vec2 id : brush_indices) {
             int i = std::clamp(static_cast<int>(id.x),0 , resY+1);
             int j = std::clamp(static_cast<int>(id.y), 0, resX+1);
-            solid_map[i * (resX + 2) + j] = true;
+
+            if (draw_field == DrawField::Solid) {
+                solid_map[i * (resX + 2) + j] = true;
+            }
+            else if (draw_field == DrawField::Smoke) {
+                smoke[i * resX + j] = 1.0;
+                if (add_constant_inflow) {
+                    smoke_inflow_map[i * resX + j] = true;
+                }
+            }
         }
         fluidSolverGPU->set_solid_map_on_GPU(solid_map);
+        fluidSolverGPU->set_smoke_field_on_GPU(smoke);
+        fluidSolverGPU->set_smoke_inflow_map_on_GPU(smoke_inflow_map);
     }
 }
 
@@ -125,6 +185,10 @@ std::vector<Vec2> FieldInitializer::get_brush_indices_from_index(Vec2 index) {
 
 
 FieldInitializer::~FieldInitializer() {
+    free(velX);
+    free(velY);
+    free(smoke);
 	free(solid_map);
     free(air_map);
+    free(smoke_inflow_map);
 }

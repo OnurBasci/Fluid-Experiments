@@ -45,6 +45,7 @@ public:
 	float* scene_bytes; //bytes to render at each frame
 	unsigned char* solid_map;
 	unsigned char* air_map;
+	unsigned char* smoke_inflow_map;
 	VisualizeField show_field_type;
 
 	float* host_field;
@@ -65,6 +66,9 @@ public:
 	void add_smoke_inflow();
 	void set_solid_map_on_GPU(const unsigned char* s_map);
 	void set_air_map_on_GPU(const unsigned char* a_map);
+	void set_smoke_field_on_GPU(const float* s_field);
+	void set_smoke_inflow_map_on_GPU(const unsigned char* s_field);
+	void set_vel_field_on_GPU(const float* velX, const float* velY);
 
 	//solver functions
 	void determine_time_step();
@@ -74,10 +78,13 @@ public:
 	void project();
 	void compute_divergence();
 
-	//visualization helpers
+	//visualization
+	void set_host_field();
 	void construct_velocity_center();
 	std::vector<unsigned char> scalar_field_to_bytes(float normalize_factor);
 	std::vector<unsigned char> vector_field_to_bytes();
+	void apply_red_blue_map(const float val, float& r, float& g, float& b);
+	void apply_gray_map(const float val, float& r, float& g, float& b);
 
 	~FluidSolverGPU();
 };
