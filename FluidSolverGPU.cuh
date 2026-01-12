@@ -38,6 +38,7 @@ public:
 	float* pressure_new;
 	float* pressure_old;
 	float* smoke;
+	Vec2* external_vel; //velocity field containing external forces
 	float* swap_smoke;
 	float* temperature;
 	float* swap_temperature;
@@ -60,8 +61,6 @@ public:
 	FluidSolverGPU();
 
 	//initialization
-	void initialize_fields();
-	void initialize_environment();
 	void add_temperature_inflow();
 	void add_smoke_inflow();
 	void set_solid_map_on_GPU(const unsigned char* s_map);
@@ -69,6 +68,7 @@ public:
 	void set_smoke_field_on_GPU(const float* s_field);
 	void set_smoke_inflow_map_on_GPU(const unsigned char* s_field);
 	void set_vel_field_on_GPU(const float* velX, const float* velY);
+	void set_external_vel_field_on_GPU(const Vec2* external_vel);
 
 	//solver functions
 	void determine_time_step();

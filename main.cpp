@@ -103,9 +103,6 @@ int main()
     glEnableVertexAttribArray(2);
 
 
-    // load and create a texture 
-    // -------------------------
-
     bool use_gpu = true;
 
     FluidSolverGPU fluid_solverGPU;
@@ -114,6 +111,8 @@ int main()
     int draw_field_index = 0;
     bool simulation_started=false;
     float brush_size = 5.0;
+    int wind_direction = 0;
+    
 
     //initialize field
     FieldInitializer fieldInitializer(fluid_solverGPU);
@@ -220,6 +219,23 @@ int main()
         if (ImGui::DragFloat("brush size", &brush_size, 1.0, 1.0, 50.0)) {
             fieldInitializer.brush_size = brush_size;
         }
+        //add wind
+        ImGui::Text("wind direction");
+        if (ImGui::RadioButton("right", &wind_direction, 0)) {
+            fieldInitializer.set_constant_velocity_inflow_from_border(wind_direction);
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("down", &wind_direction, 1)) {
+            fieldInitializer.set_constant_velocity_inflow_from_border(wind_direction);
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("left", &wind_direction, 2)) {
+            fieldInitializer.set_constant_velocity_inflow_from_border(wind_direction);
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("up", &wind_direction, 3)) {
+            fieldInitializer.set_constant_velocity_inflow_from_border(wind_direction);
+        }
         if (ImGui::Button("Wind Tunnel State")) {
             fieldInitializer.set_wind_tunnel();
         }
@@ -227,7 +243,7 @@ int main()
             simulation_started = true;
         }
         if (ImGui::Button("Restart Simulation")) {
-            fieldInitializer.reset_field();
+            fieldInitializer.reset_field(wind_direction);
             simulation_started = false;
         }
         ImGui::End();

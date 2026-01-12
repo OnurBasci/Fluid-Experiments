@@ -9,11 +9,12 @@ FieldInitializer::FieldInitializer(FluidSolverGPU& fluid_solver_gpu): resX(RESXG
 	solid_map = (unsigned char*)malloc((resY + 2) * (resX + 2) * sizeof(char));
 	air_map = (unsigned char*)malloc((resY + 2) * (resX + 2) * sizeof(char));
     smoke_inflow_map = (unsigned char*)malloc(resY*resX * sizeof(char));
+    external_vel = (Vec2*)malloc(resX * resY * sizeof(Vec2));
 
     set_default_fields();
 }
 
-void FieldInitializer::set_default_fields() {
+void FieldInitializer::set_default_fields(int wind_dir) {
     //set velocity fields
     for (int i = 0; i < resY; i ++) {
         for (int j = 0; j < resX+1; j++) {
@@ -27,13 +28,19 @@ void FieldInitializer::set_default_fields() {
         }
     }
 
+    //set resY*resX fields
+    int center = resY / 2;
     for (int i = 0; i < resY; i++) {
         for (int j = 0; j < resX; j++) {
             smoke[i * resX + j] = 0.0;
             smoke_inflow_map[i * resX + j] = false;
+
         }
     }
 
+    set_constant_velocity_inflow_from_border(wind_dir);
+
+    //set solid an air blocks
     for (int i = 0; i < resY + 2; i++) {
         for (int j = 0; j < resX + 2; j++) {
             solid_map[i * (resX + 2) + j] = false;
@@ -52,13 +59,18 @@ void FieldInitializer::set_default_fields() {
     fluidSolverGPU->set_smoke_field_on_GPU(smoke);
     fluidSolverGPU->set_vel_field_on_GPU(velX, velY);
     fluidSolverGPU->set_smoke_inflow_map_on_GPU(smoke_inflow_map);
+    fluidSolverGPU->set_external_vel_field_on_GPU(external_vel);
 }
 
-void FieldInitializer::reset_field() {
-    set_default_fields();
+void FieldInitializer::reset_field(int wind_dir) {
+    set_default_fields(wind_dir);
 }
 
 void FieldInitializer::set_wind_tunnel() {
+    //set constant velocity coming from left
+    set_constant_velocity_inflow_from_border(0);
+
+
     //set solid blocks
     for (int i = 0; i < resY + 2; i++) {
         for (int j = 0; j < resX + 2; j++) {
@@ -110,6 +122,58 @@ void FieldInitializer::set_wind_tunnel() {
     fluidSolverGPU->set_air_map_on_GPU(air_map);
     fluidSolverGPU->set_smoke_inflow_map_on_GPU(smoke_inflow_map);
     fluidSolverGPU->set_smoke_field_on_GPU(smoke);
+}
+
+void FieldInitializer::set_constant_velocity_inflow_from_border(const int border_index) {
+    /*
+    adds constant velocity from borders id = 0 left, id = 1 top, id = 2 right, id = 3 bottom
+    */
+
+    for (int i = 0; i < resY; i++) {
+        for (int j = 0; j < resX; j++) {
+
+            external_vel[i * resX + j] = Vec2(0, 0);
+
+            switch (border_index)
+            {
+            case 0:
+                //wind coming from left
+                external_vel[i * resX + j] = Vec2(0, 0);
+                if (j == 0) {
+                    external_vel[i * resX + j] = Vec2(wind_force, 0);
+                }
+                break;
+            case 1:
+                //wind coming from top
+                external_vel[i * resX + j] = Vec2(0, 0);
+                if (i == 0) {
+                    external_vel[i * resX + j] = Vec2(0, -wind_force);
+                }
+                break;
+            case 2:
+                //wind coming from right
+                if (j == resX-2) {
+                    external_vel[i * resX + j] = Vec2(-wind_force, 0);
+                }
+                break;
+            case 3:
+                //wind coming from bottom
+                if (i == resY-2) {
+                    external_vel[i * resX + j] = Vec2(0, wind_force);
+                }
+                break;
+            default:
+                //wind coming from left
+                if (j == 0) {
+                    external_vel[i * resX + j] = Vec2(wind_force, 0);
+                }
+                break;
+            }
+
+        }
+    }
+
+    fluidSolverGPU->set_external_vel_field_on_GPU(external_vel);
 }
 
 void FieldInitializer::setup_environment_by_mouse_interaction(DrawField draw_field) {
@@ -191,4 +255,5 @@ FieldInitializer::~FieldInitializer() {
 	free(solid_map);
     free(air_map);
     free(smoke_inflow_map);
+    free(external_vel);
 }

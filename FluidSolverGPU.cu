@@ -5,47 +5,9 @@
 
 CUDA_D
 float sample_scalar_field(float* field, Vec2 pos, int resX, int resY);
+Vec2 sample_vector_field(Vec2* field, Vec2 pos, int resX, int resY);
 
 //KERNELS
-__global__
-void initialize_sinusoidal_velX_kernel(float* velX, float frequency, float amplitude, int resX, int resY) {
-    int idx = blockDim.x * blockIdx.x + threadIdx.x;
-
-    //handle the out of bounds
-    int num_cells = resX * resY;
-    if (idx >= num_cells) return;
-
-    int i = idx / resX;
-    int j = idx % resX;
-
-    const float dx = 1.0f / static_cast<float>(resX);
-    const float dy = 1.0f / static_cast<float>(resY);
-
-    float x = dx * j;
-    float y = dy * i;
-
-    velX[i * resX + j] = 0.0; // cosf(x * frequency)* amplitude;
-}
-
-__global__
-void initialize_sinusoidal_velY_kernel(float* velY, float frequency, float amplitude, int resX, int resY) {
-    int idx = blockDim.x * blockIdx.x + threadIdx.x;
-
-    //handle the out of bounds
-    int num_cells = resX * resY;
-    if (idx >= num_cells) return;
-
-    int i = idx / resX;
-    int j = idx % resX;
-
-    const float dx = 1.0f / static_cast<float>(resX);
-    const float dy = 1.0f / static_cast<float>(resY);
-
-    float x = dx * j;
-    float y = dy * i;
-
-    velY[i * resX + j] = 0.0;// cosf(y * frequency)* amplitude;
-}
 
 __global__
 void construct_vel_center_kernel(Vec2* vel_center, float* velX, float* velY, int resX, int resY) {
@@ -118,26 +80,6 @@ void add_block_inflow_bottom_kernel(float* field, int resX, int resY, float val)
 }
 
 __global__
-void add_block_inflow_left_kernel(float* field, int resX, int resY, float range, float val) {
-    /*
-    range [0,1] if 1 all the left covered
-    */
-    int idx = blockDim.x * blockIdx.x + threadIdx.x;
-
-    int num_cells = resX * resY;
-    if (idx >= num_cells) return;
-
-    int i = idx / resX;
-    int j = idx % resX;
-
-    int center = resX / 2;
-
-    if (j == 10 && i > center - range*center && i < center + range*center) {
-        field[i * resX + j] = val;
-    }
-}
-
-__global__
 void add_block_inflow_from_map(float* field, unsigned char* inflow_map, int resX, int resY, float val) {
     /*
     range [0,1] if 1 all the left covered
@@ -150,9 +92,13 @@ void add_block_inflow_from_map(float* field, unsigned char* inflow_map, int resX
     int i = idx / resX;
     int j = idx % resX;
 
-    int center = resX / 2;
+    /*if (i == 0 && j == 20) {
+        printf("on gpu %d\n", inflow_map[i*resX+j]);
+    }*/
 
-    field[i * resX + j] = inflow_map[i * resX + j] ? val : field[i * resX + j];
+    if (inflow_map[i * resX + j]) {
+        field[i * resX + j] = val;
+    }
 }
 
 __global__
@@ -266,6 +212,27 @@ void add_external_force_wind_tunel_kernel(float* velX, int resX, int resY, float
     if (j == 8 && i >= 0 * center && i < resY) {
         velX[i * resX_1 + j] = wind_force;
     }
+}
+
+__global__
+void set_external_forces(float* velX, float* velY, Vec2* external_vel, int resX, int resY, float dx) {
+    //sets velx and vely from an external vel field
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    int num_cells = resX * resY;
+    if (idx >= num_cells) return;
+
+    int i = idx / resX;
+    int j = idx % resX;
+
+    //sample the values at (i-1/2dx, j) and (i, j-1/2dx)
+    Vec2 sampled_up = sample_vector_field(external_vel, Vec2(j, i-dx*0.5), resX, resX);
+    Vec2 sampled_left = sample_vector_field(external_vel, Vec2(j-dx*0.5, i), resX, resX);
+
+    if (abs(abs(sampled_left.x) > 0))
+        velX[i * (resX + 1) + j] = sampled_left.x;
+    if (abs(sampled_up.y) > 0)
+        velY[i * resX + j] = sampled_up.y;
 }
 
 __global__
@@ -414,6 +381,40 @@ float sample_scalar_field(float* field, Vec2 pos, int resX, int resY)
     return vx0 * (1.0f - ty) + vx1 * ty;
 }
 
+CUDA_D
+Vec2 sample_vector_field(Vec2* field, Vec2 pos, int resX, int resY)
+{
+    // Clamp position to valid index range
+    float x = CLAMP(pos.x, 0.0f, static_cast<float>(resX - 1));
+    float y = CLAMP(pos.y, 0.0f, static_cast<float>(resY - 1));
+
+    // Integer cell indices
+    int j0 = static_cast<int>(floorf(x));
+    int i0 = static_cast<int>(floorf(y));
+
+    int j1 = min(j0 + 1, resX - 1);        // x index: 0 .. RESX
+    int i1 = min(i0 + 1, resY - 1);    // y index: 0 .. RESY-1
+
+    // Fractions inside the cell
+    float tx = x - static_cast<float>(j0);
+    float ty = y - static_cast<float>(i0);
+
+    Vec2 v00 = field[i0 * resX + j0];
+    Vec2 v10 = field[i0 * resX + j1];
+    Vec2 v01 = field[i1 * resX + j0];
+    Vec2 v11 = field[i1 * resX + j1];
+
+    // Bilinear interpolation x
+    float vx0x = v00.x * (1.0f - tx) + v10.x * tx;
+    float vx1x = v01.x * (1.0f - tx) + v11.x * tx;
+
+    // Bilinear interpolation y
+    float vx0y = v00.y * (1.0f - tx) + v10.y * tx;
+    float vx1y = v01.y * (1.0f - tx) + v11.y * tx;
+
+    return Vec2(vx0x * (1.0f - ty) + vx1x * ty, vx0y * (1.0f - ty) + vx1y * ty);
+}
+
 
 //INITIALIZATION
 FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX* ResY), block_size(256) {
@@ -425,6 +426,7 @@ FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX*
     CUDA_CHECK(cudaMalloc(&velY, ((ResY + 1) * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&velY_temp, ((ResY + 1) * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&vel_center, ResX * ResY * sizeof(Vec2)));
+    CUDA_CHECK(cudaMalloc(&external_vel, ResX * ResY * sizeof(Vec2)));
     CUDA_CHECK(cudaMalloc(&pressure_new, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&pressure_old, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&smoke, (ResY * ResX) * sizeof(float)));
@@ -443,33 +445,11 @@ FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX*
     host_field = (float*)malloc(host_field_size);
     host_vector_field = (Vec2*)malloc(host_vector_field_size);
 
-    //initialize_fields();
-    //initialize_environment();
     construct_velocity_center();
 
     //copy memories
-    cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(host_vector_field, vel_center, host_vector_field_size, cudaMemcpyDeviceToHost);
-}
-
-void FluidSolverGPU::initialize_fields() {
-
-    //Sinusoidal velocity field initialization
-    float frequency = 16; float amplitude = 2;
-	int number_of_cells = (ResX+1) * ResY;
-	int grid_size = (number_of_cells + block_size - 1) / block_size;
-    initialize_sinusoidal_velX_kernel <<<grid_size, block_size>>>(velX, frequency, amplitude, ResX+1, ResY);
-
-    //initialize velocity y
-    number_of_cells = ResX * (ResY + 1);
-    grid_size = (number_of_cells + block_size - 1) / block_size;
-    initialize_sinusoidal_velY_kernel <<<grid_size, block_size >>> (velY, frequency, amplitude, ResX, ResY+1);  
-
-    //initialize smoke field
-    grid_size = (num_cells + block_size - 1) / block_size;
-    //add_block_inflow_bottom_kernel <<<grid_size, block_size >>> (smoke, ResX, ResY);
-    //initialize_smoke_field <<<grid_size, block_size>>> (smoke, ResX, ResY);
-    add_block_inflow_left_kernel << <grid_size, block_size >> > (smoke, ResX, ResY, 0.2, 1.0);
+    CUDA_CHECK(cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(host_vector_field, vel_center, host_vector_field_size, cudaMemcpyDeviceToHost));
 }
 
 void FluidSolverGPU::add_temperature_inflow() {
@@ -482,98 +462,38 @@ void FluidSolverGPU::add_smoke_inflow() {
     int grid_size = (num_cells + block_size - 1) / block_size;
 
     //add_block_inflow_bottom_kernel<<<grid_size, block_size >>>(smoke, ResX, ResY);
-    //add_block_inflow_left_kernel <<<grid_size, block_size >>> (smoke, ResX, ResY, 0.1, 1.0);
     add_block_inflow_from_map <<<grid_size, block_size >>> (smoke, smoke_inflow_map, ResX, ResY, 1.0);
-}
-
-void FluidSolverGPU::initialize_environment() {
-    //allocate cpu field memories
-    float* temperature_host = (float *) malloc(ResX*ResY*sizeof(float));
-    unsigned char* solid_map_host = (unsigned char*)malloc((ResY+2)*(ResX+2)*sizeof(char));
-    unsigned char* air_map_host = (unsigned char*)malloc((ResY+2) * (ResX+2) * sizeof(char));
-
-    //initialize solid field
-    for (int i = 0; i < ResY + 2; i++) {
-        for (int j = 0; j < ResX + 2; j++) {
-            //make the border solid
-            if ( i == 2 || i == ResY-1) {
-                solid_map_host[i * (ResX + 2) + j] = true;
-            }
-            else
-            {
-                solid_map_host[i * (ResX + 2) + j] = false;
-            }
-
-            //draw sphere obstical in the center
-            Vec2 offset(-ResX/4, 0);
-            float radius = (ResX / 8);
-            if (std::pow((i - ResY / 2 - offset.y), 2) + std::pow((j - ResX / 2- offset.x), 2) < radius*radius) {
-                solid_map_host[i*(ResX+2)+j] = true;
-            }
-        }
-    }
-
-    //initialize air field
-    for (int i = 0; i < ResY + 2; i++) {
-        for (int j = 0; j < ResX + 2; j++) {
-            //make the border air
-            if (i == 0 || i == ResY + 1 || j == 0 || j == ResX + 1) {
-                air_map_host[i*(ResX+2)+j] = true;
-            }
-            else {
-                air_map_host[i * (ResX + 2) + j] = false;
-            }
-        }
-    }
-
-    //initialize temperature
-    for (int i = 0; i < ResY; i++) {
-        for (int j = 0; j < ResX; j++) {
-            if (i > ResY - 8 && i < ResY - 1 && j > ResX / 2 - ResX / 6 && j < ResX / 2 + ResX / 6) {
-                temperature_host[i*ResX+j] = T_incoming;
-            }
-            else
-            {
-                temperature_host[i*ResX+j] = T_amb;
-            }
-        }
-    }
-
-    //copy memory to gpu
-    cudaMemcpy(temperature, temperature_host, host_field_size, cudaMemcpyHostToDevice);
-    size_t map_size = (ResX + 2) * (ResY + 2) * sizeof(char);
-    cudaMemcpy(solid_map, solid_map_host, map_size, cudaMemcpyHostToDevice);
-    cudaMemcpy(air_map, air_map_host, map_size, cudaMemcpyHostToDevice);
-
-    free(temperature_host);
-    free(solid_map_host);
-    free(air_map_host);
 }
 
 void FluidSolverGPU::set_solid_map_on_GPU(const unsigned char* s_map) {
     size_t map_size = (ResX + 2) * (ResY + 2) * sizeof(char);
-    cudaMemcpy(solid_map, s_map, map_size, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(solid_map, s_map, map_size, cudaMemcpyHostToDevice));
 }
 
 void FluidSolverGPU::set_air_map_on_GPU(const unsigned char* a_map) {
     size_t map_size = (ResX + 2) * (ResY + 2) * sizeof(char);
-    cudaMemcpy(air_map, a_map, map_size, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(air_map, a_map, map_size, cudaMemcpyHostToDevice));
 }
 
 void FluidSolverGPU::set_smoke_field_on_GPU(const float* smoke_field) {
     size_t map_size = (ResX) * (ResY) * sizeof(float);
-    cudaMemcpy(smoke, smoke_field, map_size, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(smoke, smoke_field, map_size, cudaMemcpyHostToDevice));
 }
 
 void FluidSolverGPU::set_smoke_inflow_map_on_GPU(const unsigned char* s_inflow_map) {
     size_t map_size = (ResX) * (ResY) * sizeof(char);
-    cudaMemcpy(smoke_inflow_map, s_inflow_map, map_size, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(smoke_inflow_map, s_inflow_map, map_size, cudaMemcpyHostToDevice));
 }
 
 void FluidSolverGPU::set_vel_field_on_GPU(const float* vX, const float* vY) {
     size_t map_size = (ResX+1) * (ResY) * sizeof(float);
-    cudaMemcpy(velX, vX, map_size, cudaMemcpyHostToDevice);
-    cudaMemcpy(velY, vY, map_size, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(velX, vX, map_size, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(velY, vY, map_size, cudaMemcpyHostToDevice));
+}
+
+void FluidSolverGPU::set_external_vel_field_on_GPU(const Vec2* ext_vel) {
+    size_t map_size = ResX * ResY * sizeof(Vec2);
+    CUDA_CHECK(cudaMemcpy(external_vel, ext_vel, map_size, cudaMemcpyHostToDevice));
 }
 
 void FluidSolverGPU::construct_velocity_center() {
@@ -612,9 +532,9 @@ void FluidSolverGPU::determine_time_step()
 
     // Copy the result back to host
     float max_velX = 0.0f;
-    cudaMemcpy(&max_velX, max_iterX, sizeof(float), cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(&max_velX, max_iterX, sizeof(float), cudaMemcpyDeviceToHost));
     float max_velY = 0.0f;
-    cudaMemcpy(&max_velY, max_iterY, sizeof(float), cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(&max_velY, max_iterY, sizeof(float), cudaMemcpyDeviceToHost));
 
     Vec2 u_max(std::abs(max_velX), std::abs(max_velY));
     if (u_max.length() == 0.0) {
@@ -647,7 +567,7 @@ void FluidSolverGPU::advect_quantities() {
     grid_size = (number_of_cells + block_size - 1) / block_size;
     advect_velocityY_kernel <<<grid_size, block_size >>> (velY, velY_temp, velX, ResX, ResY, dt);
     //wait for the gpu before swapping
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
     std::swap(velX, velX_temp);
     std::swap(velY, velY_temp);
     std::swap(smoke, swap_smoke);
@@ -662,7 +582,12 @@ void FluidSolverGPU::add_external_force() {
     //add_external_force_smoke_kernel <<<grid_size, block_size>>>(velY, smoke, temperature, ResX, ResY, gravity, dt, density_alpha, bouyancy, T_amb);
 
     //wind tunnel case
-    add_external_force_wind_tunel_kernel <<<grid_size, block_size>>> (velX, ResX, ResY, wind_force);
+    //add_external_force_wind_tunel_kernel <<<grid_size, block_size>>> (velX, ResX, ResY, wind_force);
+
+    //set external forces
+    number_of_cells = ResX * ResY;
+    grid_size = (number_of_cells + block_size - 1) / block_size;
+    set_external_forces <<<grid_size, block_size>>>(velX, velY, external_vel, ResX, ResY, dx);
 }
 
 void FluidSolverGPU::project() {
@@ -689,19 +614,19 @@ void FluidSolverGPU::set_host_field() {
     switch (show_field_type)
     {
     case VisualizeField::Smoke:
-        cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost));
         break;
     case VisualizeField::Pressure:
-        cudaMemcpy(host_field, pressure_new, host_field_size, cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(host_field, pressure_new, host_field_size, cudaMemcpyDeviceToHost));
         break;
     case VisualizeField::Divergence:
-        cudaMemcpy(host_field, divergence, host_field_size, cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(host_field, divergence, host_field_size, cudaMemcpyDeviceToHost));
         break;
     default:
-        cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost));
         break;
     }
-    cudaMemcpy(host_vector_field, vel_center, host_vector_field_size, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(host_vector_field, vel_center, host_vector_field_size, cudaMemcpyDeviceToHost));
 }
 
 std::vector<unsigned char> FluidSolverGPU::scalar_field_to_bytes(float normalize_factor = 1.0) {
@@ -874,22 +799,23 @@ void FluidSolverGPU::apply_gray_map(const float val, float& r, float& g, float& 
 }
 
 FluidSolverGPU::~FluidSolverGPU() {
-	cudaFree(velX);
-	cudaFree(velY);
-    cudaFree(velX_temp);
-    cudaFree(velY_temp);
-    cudaFree(vel_center);
-	cudaFree(pressure_new);
-    cudaFree(pressure_old);
-    cudaFree(smoke);
-    cudaFree(swap_smoke);
-    cudaFree(temperature);
-    cudaFree(swap_temperature);
-    cudaFree(divergence);
-    cudaFree(solid_map);
-    cudaFree(air_map);
-    cudaFree(scene_bytes);
-    cudaFree(smoke_inflow_map);
+	CUDA_CHECK(cudaFree(velX));
+	CUDA_CHECK(cudaFree(velY));
+    CUDA_CHECK(cudaFree(velX_temp));
+    CUDA_CHECK(cudaFree(velY_temp));
+    CUDA_CHECK(cudaFree(vel_center));
+    CUDA_CHECK(cudaFree(external_vel));
+	CUDA_CHECK(cudaFree(pressure_new));
+    CUDA_CHECK(cudaFree(pressure_old));
+    CUDA_CHECK(cudaFree(smoke));
+    CUDA_CHECK(cudaFree(swap_smoke));
+    CUDA_CHECK(cudaFree(temperature));
+    CUDA_CHECK(cudaFree(swap_temperature));
+    CUDA_CHECK(cudaFree(divergence));
+    CUDA_CHECK(cudaFree(solid_map));
+    CUDA_CHECK(cudaFree(air_map));
+    CUDA_CHECK(cudaFree(scene_bytes));
+    CUDA_CHECK(cudaFree(smoke_inflow_map));
 
     free(host_field);
     free(host_vector_field);

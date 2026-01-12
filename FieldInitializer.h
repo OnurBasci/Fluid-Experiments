@@ -22,15 +22,20 @@ public:
 	float* velX;
 	float* velY;
 	float* smoke;
+	Vec2* external_vel; //external force given by user
 	unsigned char* smoke_inflow_map;
 	float brush_size = 5;
 	FluidSolverGPU* fluidSolverGPU;
 	bool add_constant_inflow; //if true the value will be add every frame
 
+	//paramaters
+	float wind_force = 4.0;
+
 	//Predifined set ups
-	void set_default_fields();
+	void set_default_fields(int wind_dir=0);
 	void set_wind_tunnel();
-	void reset_field();
+	void reset_field(int wind_dir=0);
+	void set_constant_velocity_inflow_from_border(int border_index);
 
 	//Interactive set ups
 	void setup_environment_by_mouse_interaction(DrawField draw_field);
