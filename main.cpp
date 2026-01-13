@@ -113,6 +113,7 @@ int main()
     float brush_size = 5.0;
     int wind_direction = 0;
     Vec2 prev_mouse_pos(0,0);
+    float smoke_color[3] = { 1.0f, 1.0f, 1.0f };
 
     //initialize field
     FieldInitializer fieldInitializer(fluid_solverGPU);
@@ -174,7 +175,7 @@ int main()
         }
         else {
             //draw environment
-            fieldInitializer.setup_environment_by_mouse_interaction(static_cast<DrawField>(draw_field_index));
+            fieldInitializer.setup_environment_by_mouse_interaction(static_cast<DrawField>(draw_field_index), Vec3(smoke_color[0], smoke_color[1], smoke_color[2]));
         }
 
         auto end = std::chrono::high_resolution_clock::now();
@@ -216,6 +217,8 @@ int main()
         //Set Drawing Field
         ImGui::Text("Draw Field");
         ImGui::Checkbox("add constant flow", &fieldInitializer.add_constant_inflow);
+        ImGui::SameLine();
+        ImGui::ColorEdit3("Smoke color", smoke_color, ImGuiColorEditFlags_NoInputs);
         ImGui::RadioButton("Smoke##draw", &draw_field_index, 0);
         ImGui::RadioButton("Solid", &draw_field_index, 1);
         if (ImGui::DragFloat("brush size", &brush_size, 1.0, 1.0, 50.0)) {

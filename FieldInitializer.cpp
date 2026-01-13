@@ -8,6 +8,8 @@ FieldInitializer::FieldInitializer(FluidSolverGPU& fluid_solver_gpu): resX(RESXG
     divergence = (float*)malloc(resX*resY*sizeof(float));
     pressure = (float*)malloc(resX*resY*sizeof(float));
     smoke = (float*)malloc(resX*resY*sizeof(float));
+    color = (Vec3*)malloc(resX*resY*sizeof(Vec3));
+    color_inflow = (Vec3*)malloc(resX*resY*sizeof(Vec3));
 	solid_map = (unsigned char*)malloc((resY + 2) * (resX + 2) * sizeof(char));
 	air_map = (unsigned char*)malloc((resY + 2) * (resX + 2) * sizeof(char));
     smoke_inflow_map = (unsigned char*)malloc(resY*resX * sizeof(char));
@@ -39,6 +41,8 @@ void FieldInitializer::set_default_fields(int wind_dir) {
             adder_external_vel[i * resX + j] = Vec2(0,0);
             divergence[i * resX + j] = 0;
             pressure[i * resX + j] = 0;
+            color[i * resX + j] = Vec3(0.0,0.0,0.0);
+            color_inflow[i * resX + j] = Vec3(0.0,0.0,0.0);
         }
     }
 
@@ -66,6 +70,8 @@ void FieldInitializer::set_default_fields(int wind_dir) {
     fluidSolverGPU->set_adder_external_vel_field_on_GPU(adder_external_vel);
     fluidSolverGPU->set_divergence_on_GPU(divergence);
     fluidSolverGPU->set_pressure_on_GPU(pressure);
+    fluidSolverGPU->set_color_field_on_GPU(color);
+    fluidSolverGPU->set_color_inflow_on_GPU(color_inflow);
 }
 
 void FieldInitializer::reset_field(int wind_dir) {
@@ -180,7 +186,7 @@ void FieldInitializer::set_constant_velocity_inflow_from_border(const int border
     fluidSolverGPU->set_setter_external_vel_field_on_GPU(setter_external_vel);
 }
 
-void FieldInitializer::setup_environment_by_mouse_interaction(DrawField draw_field) {
+void FieldInitializer::setup_environment_by_mouse_interaction(DrawField draw_field, Vec3 smoke_color) {
     /*
     Sets the clicked block as a solid block
     */
@@ -205,14 +211,18 @@ void FieldInitializer::setup_environment_by_mouse_interaction(DrawField draw_fie
             }
             else if (draw_field == DrawField::Smoke) {
                 smoke[i * resX + j] = 1.0;
+                color[i * resX + j] = smoke_color;
                 if (add_constant_inflow) {
                     smoke_inflow_map[i * resX + j] = true;
+                    color_inflow[i * resX + j] = smoke_color;
                 }
             }
         }
         fluidSolverGPU->set_solid_map_on_GPU(solid_map);
         fluidSolverGPU->set_smoke_field_on_GPU(smoke);
         fluidSolverGPU->set_smoke_inflow_map_on_GPU(smoke_inflow_map);
+        fluidSolverGPU->set_color_field_on_GPU(color);
+        fluidSolverGPU->set_color_inflow_on_GPU(color_inflow);
     }
 }
 
@@ -303,4 +313,6 @@ FieldInitializer::~FieldInitializer() {
     free(smoke_inflow_map);
     free(setter_external_vel);
     free(adder_external_vel);
+    free(color);
+    free(color_inflow);
 }

@@ -2,6 +2,7 @@
 #include "FluidConfig.h"
 #include <iostream>
 #include "Vec2.h"
+#include "Vec3.h"
 #include "imgui.h"
 #include <algorithm>
 #include "FluidSolverGPU.cuh"
@@ -24,6 +25,9 @@ public:
 	float* velX;
 	float* velY;
 	float* smoke;
+	Vec3* color;
+	Vec3* color_inflow;
+
 	Vec2* setter_external_vel; //velocity field containing external forces that is set directly to the velocity field on GPU (ex: constant wind)
 	Vec2* adder_external_vel; //additional velocity field that is added to the velocity field each frame (ex: mouse forces)
 	unsigned char* smoke_inflow_map; //additional velocity field that is added to the velocity field each frame (ex: mouse forces)
@@ -42,7 +46,7 @@ public:
 	void set_constant_velocity_inflow_from_border(int border_index);
 
 	//Interactive set ups
-	void setup_environment_by_mouse_interaction(DrawField draw_field);
+	void setup_environment_by_mouse_interaction(DrawField draw_field, Vec3 smoke_color);
 	void add_force_by_mouse_interaction(Vec2& prev_pos);
 
 	Vec2 convert_screen_pos_to_field_index(Vec2 screen_pos, Vec2 screen_res);

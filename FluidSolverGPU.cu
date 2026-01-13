@@ -5,7 +5,8 @@
 
 CUDA_D
 float sample_scalar_field(float* field, Vec2 pos, int resX, int resY);
-Vec2 sample_vector_field(Vec2* field, Vec2 pos, int resX, int resY);
+Vec2 sample_vec2_field(Vec2* field, Vec2 pos, int resX, int resY);
+Vec3 sample_vec3_field(Vec3* field, Vec2 pos, int resX, int resY);
 
 //KERNELS
 
@@ -80,7 +81,7 @@ void add_block_inflow_bottom_kernel(float* field, int resX, int resY, float val)
 }
 
 __global__
-void add_block_inflow_from_map(float* field, unsigned char* inflow_map, int resX, int resY, float val) {
+void add_block_inflow_from_map(float* field, unsigned char* inflow_map, Vec3* color, Vec3* color_inflow, int resX, int resY, float val) {
     /*
     range [0,1] if 1 all the left covered
     */
@@ -98,6 +99,7 @@ void add_block_inflow_from_map(float* field, unsigned char* inflow_map, int resX
 
     if (inflow_map[i * resX + j]) {
         field[i * resX + j] = val;
+        color[i * resX + j] = color_inflow[i*resX+j];
     }
 }
 
@@ -175,11 +177,10 @@ void diffuse_scalar_field_kernel(float* field, float* swap_field, unsigned char*
 
     if (solid_map[(i + 1) * (resX + 2) + (j + 1)]) return;
 
-    //Neuman condition for solid and air pixels
+    //Dirichlet condition for solid and air pixels
     unsigned char st = solid_map[i * (resX + 2) + j + 1]; unsigned char sb = solid_map[(i + 2) * (resX + 2) + j + 1]; unsigned char sl = solid_map[(i + 1) * (resX + 2) + j]; unsigned char sr = solid_map[(i + 1) * (resX + 2) + j + 2];
     unsigned char at = air_map[i * (resX + 2) + j + 1]; unsigned char ab = air_map[(i + 2) * (resX + 2) + j + 1]; unsigned char al = air_map[(i + 1) * (resX + 2) + j]; unsigned char ar = air_map[(i + 1) * (resX + 2) + j + 2];
 
-    //the pressure is 0 if solid or air cell
     float top = st || at ? 0.0 : field[(i - 1) * resX + j];
     float right = sr || ar ? 0.0 : field[i * resX + j + 1];
     float bottom = sb || ab ? 0.0 : field[(i + 1) * resX + j];
@@ -190,6 +191,24 @@ void diffuse_scalar_field_kernel(float* field, float* swap_field, unsigned char*
     float diffused = center + laplacian * dt*diffuse_factor;
 
     swap_field[i * resX + j] = diffused;
+}
+
+__global__
+void advect_vec3_kernel(Vec3* field, Vec3* swap_field, Vec2* vel, int resX, int resY, float dt) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    int num_cells = resX * resY;
+
+    if (idx >= num_cells) return;
+
+    int i = idx / resX;
+    int j = idx % resX;
+
+    Vec2 dir(vel[i * resX + j].x * resX, -vel[i * resX + j].y * resY);
+    //Semi lagrangian advection
+    Vec2 prev_pos = Vec2(static_cast<float>(j), static_cast<float>(i)) - dt * dir;
+
+    Vec3 sample_val = sample_vec3_field(field, prev_pos, resX, resY);
+    swap_field[i * resX + j] = sample_val;
 }
 
 __global__
@@ -258,15 +277,15 @@ void add_external_force_kernel(float* velX, float* velY, Vec2* adder_external_ve
     int j = idx % resX;
 
     //add velocity from additional external velocity kernel
-    Vec2 sampled_up_adder = sample_vector_field(adder_external_vel, Vec2(j, i - dx * 0.5), resX, resY);
-    Vec2 sampled_left_adder = sample_vector_field(adder_external_vel, Vec2(j - dx * 0.5, i), resX, resY);
+    Vec2 sampled_up_adder = sample_vec2_field(adder_external_vel, Vec2(j, i - dx * 0.5), resX, resY);
+    Vec2 sampled_left_adder = sample_vec2_field(adder_external_vel, Vec2(j - dx * 0.5, i), resX, resY);
 
     velX[i * (resX + 1) + j] += sampled_left_adder.x*dt;
     velY[i * resX + j] += sampled_up_adder.y*dt;
 
     //sample the values at (i-1/2dx, j) and (i, j-1/2dx)
-    Vec2 sampled_up_setter = sample_vector_field(setter_external_vel, Vec2(j, i-dx*0.5), resX, resY);
-    Vec2 sampled_left_setter = sample_vector_field(setter_external_vel, Vec2(j-dx*0.5, i), resX, resY);
+    Vec2 sampled_up_setter = sample_vec2_field(setter_external_vel, Vec2(j, i-dx*0.5), resX, resY);
+    Vec2 sampled_left_setter = sample_vec2_field(setter_external_vel, Vec2(j-dx*0.5, i), resX, resY);
 
     if (fabs(sampled_left_setter.x) > 0)
         velX[i * (resX + 1) + j] = sampled_left_setter.x;
@@ -421,7 +440,7 @@ float sample_scalar_field(float* field, Vec2 pos, int resX, int resY)
 }
 
 CUDA_D
-Vec2 sample_vector_field(Vec2* field, Vec2 pos, int resX, int resY)
+Vec2 sample_vec2_field(Vec2* field, Vec2 pos, int resX, int resY)
 {
     // Clamp position to valid index range
     float x = CLAMP(pos.x, 0.0f, static_cast<float>(resX - 1));
@@ -454,6 +473,44 @@ Vec2 sample_vector_field(Vec2* field, Vec2 pos, int resX, int resY)
     return Vec2(vx0x * (1.0f - ty) + vx1x * ty, vx0y * (1.0f - ty) + vx1y * ty);
 }
 
+CUDA_D
+Vec3 sample_vec3_field(Vec3* field, Vec2 pos, int resX, int resY)
+{
+    // Clamp position to valid index range
+    float x = CLAMP(pos.x, 0.0f, static_cast<float>(resX - 1));
+    float y = CLAMP(pos.y, 0.0f, static_cast<float>(resY - 1));
+
+    // Integer cell indices
+    int j0 = static_cast<int>(floorf(x));
+    int i0 = static_cast<int>(floorf(y));
+
+    int j1 = min(j0 + 1, resX - 1);        // x index: 0 .. RESX
+    int i1 = min(i0 + 1, resY - 1);    // y index: 0 .. RESY-1
+
+    // Fractions inside the cell
+    float tx = x - static_cast<float>(j0);
+    float ty = y - static_cast<float>(i0);
+
+    Vec3 v00 = field[i0 * resX + j0];
+    Vec3 v10 = field[i0 * resX + j1];
+    Vec3 v01 = field[i1 * resX + j0];
+    Vec3 v11 = field[i1 * resX + j1];
+
+    // Bilinear interpolation x
+    float vx0x = v00.x * (1.0f - tx) + v10.x * tx;
+    float vx1x = v01.x * (1.0f - tx) + v11.x * tx;
+
+    // Bilinear interpolation y
+    float vx0y = v00.y * (1.0f - tx) + v10.y * tx;
+    float vx1y = v01.y * (1.0f - tx) + v11.y * tx;
+
+    // Bilinear interpolation z
+    float vx0z = v00.z * (1.0f - tx) + v10.z * tx;
+    float vx1z = v01.z * (1.0f - tx) + v11.z * tx;
+
+    return Vec3(vx0x * (1.0f - ty) + vx1x * ty, vx0y * (1.0f - ty) + vx1y * ty, vx0z * (1.0f - ty) + vx1z * ty);
+}
+
 
 //INITIALIZATION
 FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX* ResY), block_size(256) {
@@ -471,6 +528,9 @@ FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX*
     CUDA_CHECK(cudaMalloc(&pressure_new, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&pressure_old, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&smoke, (ResY * ResX) * sizeof(float)));
+    CUDA_CHECK(cudaMallocManaged(&color, (ResY*ResX) * sizeof(Vec3)));
+    CUDA_CHECK(cudaMallocManaged(&swap_color, (ResY*ResX) * sizeof(Vec3)));
+    CUDA_CHECK(cudaMalloc(&color_inflow, (ResY*ResX) * sizeof(Vec3)));
     CUDA_CHECK(cudaMalloc(&swap_smoke, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&temperature, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&swap_temperature, (ResY * ResX) * sizeof(float)));
@@ -503,7 +563,7 @@ void FluidSolverGPU::add_smoke_inflow() {
     int grid_size = (num_cells + block_size - 1) / block_size;
 
     //add_block_inflow_bottom_kernel<<<grid_size, block_size >>>(smoke, ResX, ResY);
-    add_block_inflow_from_map <<<grid_size, block_size >>> (smoke, smoke_inflow_map, ResX, ResY, 1.0);
+    add_block_inflow_from_map <<<grid_size, block_size >>> (smoke, smoke_inflow_map, color, color_inflow, ResX, ResY, 1.0);
 }
 
 void FluidSolverGPU::set_solid_map_on_GPU(const unsigned char* s_map) {
@@ -551,6 +611,16 @@ void FluidSolverGPU::set_setter_external_vel_field_on_GPU(const Vec2* ext_vel) {
 void FluidSolverGPU::set_adder_external_vel_field_on_GPU(const Vec2* ext_vel) {
     size_t map_size = ResX * ResY * sizeof(Vec2);
     CUDA_CHECK(cudaMemcpy(adder_external_vel, ext_vel, map_size, cudaMemcpyHostToDevice));
+}
+
+void FluidSolverGPU::set_color_field_on_GPU(const Vec3* c) {
+    size_t map_size = ResX * ResY * sizeof(Vec3);
+    CUDA_CHECK(cudaMemcpy(color, c, map_size, cudaMemcpyHostToDevice));
+}
+
+void FluidSolverGPU::set_color_inflow_on_GPU(const Vec3* c) {
+    size_t map_size = ResX * ResY * sizeof(Vec3);
+    CUDA_CHECK(cudaMemcpy(color_inflow, c, map_size, cudaMemcpyHostToDevice));
 }
 
 void FluidSolverGPU::construct_velocity_center() {
@@ -624,6 +694,9 @@ void FluidSolverGPU::advect_quantities() {
     int grid_size = (num_cells + block_size - 1) / block_size;
     advect_quantity_kernel<<<grid_size, block_size>>>(smoke, swap_smoke, vel_center, ResX, ResY, dt);
 
+    //advect color
+    advect_vec3_kernel <<<grid_size, block_size >>> (color, swap_color, vel_center, ResX, ResY, dt);
+
     //advect temperature
     advect_quantity_kernel <<<grid_size, block_size >>> (temperature, swap_temperature, vel_center, ResX, ResY, dt);
 
@@ -641,6 +714,7 @@ void FluidSolverGPU::advect_quantities() {
     std::swap(velX, velX_temp);
     std::swap(velY, velY_temp);
     std::swap(smoke, swap_smoke);
+    std::swap(color, swap_color);
     std::swap(temperature, swap_temperature);
 }
 
@@ -756,8 +830,12 @@ std::vector<unsigned char> FluidSolverGPU::scalar_field_to_bytes(float normalize
             switch (show_field_type)
             {
             case VisualizeField::Smoke:
-                apply_gray_map(t, r, g, b);
+            {
+                //apply_gray_map(t, r, g, b);
+                Vec3 col = t * color[i * ResX + j];
+                r = col.x; g = col.y; b = col.z;
                 break;
+            }
             case VisualizeField::Pressure:
                 apply_red_blue_map(t, r, g, b);
                 break;
@@ -899,6 +977,9 @@ FluidSolverGPU::~FluidSolverGPU() {
     CUDA_CHECK(cudaFree(air_map));
     CUDA_CHECK(cudaFree(scene_bytes));
     CUDA_CHECK(cudaFree(smoke_inflow_map));
+    CUDA_CHECK(cudaFree(color));
+    CUDA_CHECK(cudaFree(swap_color));
+    CUDA_CHECK(cudaFree(color_inflow));
 
     free(host_field);
     free(host_vector_field);

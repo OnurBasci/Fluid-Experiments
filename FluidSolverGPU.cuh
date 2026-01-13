@@ -1,6 +1,7 @@
 #pragma once
 #include<vector>
 #include "Vec2.h"
+#include "Vec3.h"
 #include <cuda_runtime.h>
 //#include <math_functions.h>
 #include <device_launch_parameters.h>
@@ -56,6 +57,9 @@ public:
 	float* pressure_new;
 	float* pressure_old;
 	float* smoke;
+	Vec3* color;
+	Vec3* color_inflow;
+	Vec3* swap_color;
 	Vec2* setter_external_vel; //velocity field containing external forces that is set directly to the velocity field
 	Vec2* adder_external_vel; //additional velocity field that is added to the velocity field each frame
 	float* swap_smoke;
@@ -91,6 +95,8 @@ public:
 	void set_adder_external_vel_field_on_GPU(const Vec2* external_vel);
 	void set_divergence_on_GPU(const float* div);
 	void set_pressure_on_GPU(const float* press);
+	void set_color_field_on_GPU(const Vec3* color);
+	void set_color_inflow_on_GPU(const Vec3* color_inflow);
 
 	//solver functions
 	void determine_time_step();
