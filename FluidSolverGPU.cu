@@ -161,6 +161,38 @@ void advect_velocityY_kernel(float* velY, float* velY_temp, float* velX, int res
 }
 
 __global__
+void diffuse_scalar_field_kernel(float* field, float* swap_field, unsigned char* solid_map, unsigned char* air_map, int resX, int resY, float dx, float dt, float diffuse_factor) {
+    /*
+    diffuse the field with laplacian operator
+    */
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    int num_cells = resX * resY;
+    if (idx >= num_cells) return;
+
+    int i = idx / resX;
+    int j = idx % resX;
+
+    if (solid_map[(i + 1) * (resX + 2) + (j + 1)]) return;
+
+    //Neuman condition for solid and air pixels
+    unsigned char st = solid_map[i * (resX + 2) + j + 1]; unsigned char sb = solid_map[(i + 2) * (resX + 2) + j + 1]; unsigned char sl = solid_map[(i + 1) * (resX + 2) + j]; unsigned char sr = solid_map[(i + 1) * (resX + 2) + j + 2];
+    unsigned char at = air_map[i * (resX + 2) + j + 1]; unsigned char ab = air_map[(i + 2) * (resX + 2) + j + 1]; unsigned char al = air_map[(i + 1) * (resX + 2) + j]; unsigned char ar = air_map[(i + 1) * (resX + 2) + j + 2];
+
+    //the pressure is 0 if solid or air cell
+    float top = st || at ? 0.0 : field[(i - 1) * resX + j];
+    float right = sr || ar ? 0.0 : field[i * resX + j + 1];
+    float bottom = sb || ab ? 0.0 : field[(i + 1) * resX + j];
+    float left = sl || al ? 0.0 : field[i * resX + j - 1];
+    float center = field[i * resX + j];
+
+    float laplacian = (top + right + bottom + left - 4 * center) / (dx * dx);
+    float diffused = center + laplacian * dt*diffuse_factor;
+
+    swap_field[i * resX + j] = diffused;
+}
+
+__global__
 void advect_quantity_kernel(float* field, float* swap_field, Vec2* vel, int resX, int resY, float dt) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     int num_cells = resX * resY;
@@ -539,6 +571,7 @@ void FluidSolverGPU::solve_smoke() {
     add_smoke_inflow();
 
     //simulation steps
+    diffuse_smoke();
     advect_quantities();
     add_external_force();
     project();
@@ -573,6 +606,13 @@ void FluidSolverGPU::determine_time_step()
 
     float dtCfl = (umax > eps) ? (cfl * dx / umax) : dtMax;  // at rest, allow dtMax
     dt = fminf(dtCfl, dtMax);
+}
+
+void FluidSolverGPU::diffuse_smoke() {
+    int grid_size = (num_cells + block_size - 1) / block_size;
+    diffuse_scalar_field_kernel<<<grid_size, block_size>>>(smoke, swap_smoke, solid_map, air_map, ResX, ResY, dx, dt, diffus_factor);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    std::swap(smoke, swap_smoke);
 }
 
 void FluidSolverGPU::advect_quantities() {

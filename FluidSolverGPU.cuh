@@ -43,6 +43,7 @@ public:
 	float T_amb = 20.0;
 	float T_incoming = 70.0;
 	float wind_force = 4.0;
+	float diffus_factor = 0.00001;
 	int jacobi_iteration = 100;
 
 	//fields
@@ -94,6 +95,7 @@ public:
 	//solver functions
 	void determine_time_step();
 	void solve_smoke();
+	void diffuse_smoke();
 	void advect_quantities();
 	void add_external_force();
 	void project();
