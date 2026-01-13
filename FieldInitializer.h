@@ -17,19 +17,23 @@ class FieldInitializer {
 public:
 	int resX;
 	int resY;
+	float* divergence;
+	float* pressure;
 	unsigned char* solid_map;
 	unsigned char* air_map;
 	float* velX;
 	float* velY;
 	float* smoke;
-	Vec2* external_vel; //external force given by user
-	unsigned char* smoke_inflow_map;
+	Vec2* setter_external_vel; //velocity field containing external forces that is set directly to the velocity field on GPU (ex: constant wind)
+	Vec2* adder_external_vel; //additional velocity field that is added to the velocity field each frame (ex: mouse forces)
+	unsigned char* smoke_inflow_map; //additional velocity field that is added to the velocity field each frame (ex: mouse forces)
 	float brush_size = 5;
 	FluidSolverGPU* fluidSolverGPU;
 	bool add_constant_inflow; //if true the value will be add every frame
 
 	//paramaters
 	float wind_force = 4.0;
+	float mouse_force = 200;
 
 	//Predifined set ups
 	void set_default_fields(int wind_dir=0);
@@ -39,6 +43,7 @@ public:
 
 	//Interactive set ups
 	void setup_environment_by_mouse_interaction(DrawField draw_field);
+	void add_force_by_mouse_interaction(Vec2& prev_pos);
 
 	Vec2 convert_screen_pos_to_field_index(Vec2 screen_pos, Vec2 screen_res);
 	std::vector<Vec2> get_brush_indices_from_index(Vec2 index);

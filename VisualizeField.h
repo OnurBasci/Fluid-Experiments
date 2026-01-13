@@ -5,8 +5,8 @@ enum class VisualizeField {
 	Smoke,
 	Pressure,
 	Divergence,
-	Temperature,
 	VelocityMagnitude,
+	Temperature,
 	Vorticity
 };
 

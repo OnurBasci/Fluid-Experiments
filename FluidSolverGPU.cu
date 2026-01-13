@@ -215,7 +215,7 @@ void add_external_force_wind_tunel_kernel(float* velX, int resX, int resY, float
 }
 
 __global__
-void set_external_forces(float* velX, float* velY, Vec2* external_vel, int resX, int resY, float dx) {
+void add_external_force_kernel(float* velX, float* velY, Vec2* adder_external_vel, Vec2* setter_external_vel, int resX, int resY, float dx, float dt) {
     //sets velx and vely from an external vel field
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -225,14 +225,21 @@ void set_external_forces(float* velX, float* velY, Vec2* external_vel, int resX,
     int i = idx / resX;
     int j = idx % resX;
 
-    //sample the values at (i-1/2dx, j) and (i, j-1/2dx)
-    Vec2 sampled_up = sample_vector_field(external_vel, Vec2(j, i-dx*0.5), resX, resX);
-    Vec2 sampled_left = sample_vector_field(external_vel, Vec2(j-dx*0.5, i), resX, resX);
+    //add velocity from additional external velocity kernel
+    Vec2 sampled_up_adder = sample_vector_field(adder_external_vel, Vec2(j, i - dx * 0.5), resX, resY);
+    Vec2 sampled_left_adder = sample_vector_field(adder_external_vel, Vec2(j - dx * 0.5, i), resX, resY);
 
-    if (abs(abs(sampled_left.x) > 0))
-        velX[i * (resX + 1) + j] = sampled_left.x;
-    if (abs(sampled_up.y) > 0)
-        velY[i * resX + j] = sampled_up.y;
+    velX[i * (resX + 1) + j] += sampled_left_adder.x*dt;
+    velY[i * resX + j] += sampled_up_adder.y*dt;
+
+    //sample the values at (i-1/2dx, j) and (i, j-1/2dx)
+    Vec2 sampled_up_setter = sample_vector_field(setter_external_vel, Vec2(j, i-dx*0.5), resX, resY);
+    Vec2 sampled_left_setter = sample_vector_field(setter_external_vel, Vec2(j-dx*0.5, i), resX, resY);
+
+    if (fabs(sampled_left_setter.x) > 0)
+        velX[i * (resX + 1) + j] = sampled_left_setter.x;
+    if (fabs(sampled_up_setter.y) > 0)
+        velY[i * resX + j] = sampled_up_setter.y;
 }
 
 __global__
@@ -426,7 +433,9 @@ FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX*
     CUDA_CHECK(cudaMalloc(&velY, ((ResY + 1) * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&velY_temp, ((ResY + 1) * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&vel_center, ResX * ResY * sizeof(Vec2)));
-    CUDA_CHECK(cudaMalloc(&external_vel, ResX * ResY * sizeof(Vec2)));
+    CUDA_CHECK(cudaMalloc(&vel_magnitude, ResX * ResY * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&setter_external_vel, ResX * ResY * sizeof(Vec2)));
+    CUDA_CHECK(cudaMalloc(&adder_external_vel, ResX * ResY * sizeof(Vec2)));
     CUDA_CHECK(cudaMalloc(&pressure_new, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&pressure_old, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&smoke, (ResY * ResX) * sizeof(float)));
@@ -485,15 +494,31 @@ void FluidSolverGPU::set_smoke_inflow_map_on_GPU(const unsigned char* s_inflow_m
     CUDA_CHECK(cudaMemcpy(smoke_inflow_map, s_inflow_map, map_size, cudaMemcpyHostToDevice));
 }
 
+void FluidSolverGPU::set_divergence_on_GPU(const float* div) {
+    size_t map_size = (ResX) * (ResY) * sizeof(float);
+    CUDA_CHECK(cudaMemcpy(divergence, div, map_size, cudaMemcpyHostToDevice));
+}
+
+void FluidSolverGPU::set_pressure_on_GPU(const float* press) {
+    size_t map_size = (ResX) * (ResY) * sizeof(float);
+    CUDA_CHECK(cudaMemcpy(pressure_new, press, map_size, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(pressure_old, press, map_size, cudaMemcpyHostToDevice));
+}
+
 void FluidSolverGPU::set_vel_field_on_GPU(const float* vX, const float* vY) {
     size_t map_size = (ResX+1) * (ResY) * sizeof(float);
     CUDA_CHECK(cudaMemcpy(velX, vX, map_size, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(velY, vY, map_size, cudaMemcpyHostToDevice));
 }
 
-void FluidSolverGPU::set_external_vel_field_on_GPU(const Vec2* ext_vel) {
+void FluidSolverGPU::set_setter_external_vel_field_on_GPU(const Vec2* ext_vel) {
     size_t map_size = ResX * ResY * sizeof(Vec2);
-    CUDA_CHECK(cudaMemcpy(external_vel, ext_vel, map_size, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(setter_external_vel, ext_vel, map_size, cudaMemcpyHostToDevice));
+}
+
+void FluidSolverGPU::set_adder_external_vel_field_on_GPU(const Vec2* ext_vel) {
+    size_t map_size = ResX * ResY * sizeof(Vec2);
+    CUDA_CHECK(cudaMemcpy(adder_external_vel, ext_vel, map_size, cudaMemcpyHostToDevice));
 }
 
 void FluidSolverGPU::construct_velocity_center() {
@@ -526,23 +551,28 @@ void FluidSolverGPU::solve_smoke() {
 //SIMULATION FUNCTIONS
 void FluidSolverGPU::determine_time_step()
 {
-    //find max and min velocity
-    float* max_iterX = thrust::max_element(thrust::device, velX, velX + (ResX + 1) * ResY);
-    float* max_iterY = thrust::max_element(thrust::device, velY, velY + ResX * (ResY+1));
+    const float cfl = 0.5f;     
+    const float dtMax = 1.0f / 60.0f;
+    const float eps = 1e-6f;
 
-    // Copy the result back to host
-    float max_velX = 0.0f;
-    CUDA_CHECK(cudaMemcpy(&max_velX, max_iterX, sizeof(float), cudaMemcpyDeviceToHost));
-    float max_velY = 0.0f;
-    CUDA_CHECK(cudaMemcpy(&max_velY, max_iterY, sizeof(float), cudaMemcpyDeviceToHost));
+    float maxAbsU = thrust::transform_reduce(
+        thrust::device,
+        velX, velX + (ResX + 1) * ResY,
+        AbsVal(),
+        0.0f,
+        thrust::maximum<float>());
 
-    Vec2 u_max(std::abs(max_velX), std::abs(max_velY));
-    if (u_max.length() == 0.0) {
-        dt = 1e-9;
-    }
-    else {
-        dt = (0.1 * 5 * dx) / u_max.length(); //dt should be smaller tan 5*dx/umax
-    }
+    float maxAbsV = thrust::transform_reduce(
+        thrust::device,
+        velY, velY + ResX * (ResY + 1),
+        AbsVal(),
+        0.0f,
+        thrust::maximum<float>());
+
+    float umax = fmaxf(maxAbsU, maxAbsV);
+
+    float dtCfl = (umax > eps) ? (cfl * dx / umax) : dtMax;  // at rest, allow dtMax
+    dt = fminf(dtCfl, dtMax);
 }
 
 void FluidSolverGPU::advect_quantities() {
@@ -587,7 +617,7 @@ void FluidSolverGPU::add_external_force() {
     //set external forces
     number_of_cells = ResX * ResY;
     grid_size = (number_of_cells + block_size - 1) / block_size;
-    set_external_forces <<<grid_size, block_size>>>(velX, velY, external_vel, ResX, ResY, dx);
+    add_external_force_kernel <<<grid_size, block_size>>>(velX, velY, adder_external_vel, setter_external_vel, ResX, ResY, dx, dt);
 }
 
 void FluidSolverGPU::project() {
@@ -621,6 +651,17 @@ void FluidSolverGPU::set_host_field() {
         break;
     case VisualizeField::Divergence:
         CUDA_CHECK(cudaMemcpy(host_field, divergence, host_field_size, cudaMemcpyDeviceToHost));
+        break;
+    case VisualizeField::VelocityMagnitude:
+        //compute the velocity magnitude
+        thrust::transform(
+            thrust::device,
+            vel_center,
+            vel_center + ResX*ResY,
+            vel_magnitude,
+            MagFunctor{}
+        );
+        CUDA_CHECK(cudaMemcpy(host_field, vel_magnitude, host_field_size, cudaMemcpyDeviceToHost));
         break;
     default:
         CUDA_CHECK(cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost));
@@ -804,7 +845,9 @@ FluidSolverGPU::~FluidSolverGPU() {
     CUDA_CHECK(cudaFree(velX_temp));
     CUDA_CHECK(cudaFree(velY_temp));
     CUDA_CHECK(cudaFree(vel_center));
-    CUDA_CHECK(cudaFree(external_vel));
+    CUDA_CHECK(cudaFree(vel_magnitude));
+    CUDA_CHECK(cudaFree(setter_external_vel));
+    CUDA_CHECK(cudaFree(adder_external_vel));
 	CUDA_CHECK(cudaFree(pressure_new));
     CUDA_CHECK(cudaFree(pressure_old));
     CUDA_CHECK(cudaFree(smoke));

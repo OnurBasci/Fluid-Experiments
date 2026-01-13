@@ -112,7 +112,7 @@ int main()
     bool simulation_started=false;
     float brush_size = 5.0;
     int wind_direction = 0;
-    
+    Vec2 prev_mouse_pos(0,0);
 
     //initialize field
     FieldInitializer fieldInitializer(fluid_solverGPU);
@@ -165,6 +165,7 @@ int main()
                 VisualizeField current_field = static_cast<VisualizeField>(show_field_index);
                 fluid_solverGPU.show_field_type = current_field;
                 fluid_solverGPU.solve_smoke();
+                fieldInitializer.add_force_by_mouse_interaction(prev_mouse_pos);
             }
             else
             {
@@ -211,6 +212,7 @@ int main()
         ImGui::RadioButton("Smoke##show", &show_field_index, 0);
         ImGui::RadioButton("Pressure", &show_field_index, 1);
         ImGui::RadioButton("Divergence", &show_field_index, 2);
+        ImGui::RadioButton("Vel_Mag", &show_field_index, 3);
         //Set Drawing Field
         ImGui::Text("Draw Field");
         ImGui::Checkbox("add constant flow", &fieldInitializer.add_constant_inflow);
@@ -221,19 +223,22 @@ int main()
         }
         //add wind
         ImGui::Text("wind direction");
-        if (ImGui::RadioButton("right", &wind_direction, 0)) {
+        if (ImGui::RadioButton("None", &wind_direction, 0)) {
+            fieldInitializer.set_constant_velocity_inflow_from_border(wind_direction);
+        }
+        if (ImGui::RadioButton("right", &wind_direction, 1)) {
             fieldInitializer.set_constant_velocity_inflow_from_border(wind_direction);
         }
         ImGui::SameLine();
-        if (ImGui::RadioButton("down", &wind_direction, 1)) {
+        if (ImGui::RadioButton("down", &wind_direction, 2)) {
             fieldInitializer.set_constant_velocity_inflow_from_border(wind_direction);
         }
         ImGui::SameLine();
-        if (ImGui::RadioButton("left", &wind_direction, 2)) {
+        if (ImGui::RadioButton("left", &wind_direction, 3)) {
             fieldInitializer.set_constant_velocity_inflow_from_border(wind_direction);
         }
         ImGui::SameLine();
-        if (ImGui::RadioButton("up", &wind_direction, 3)) {
+        if (ImGui::RadioButton("up", &wind_direction, 4)) {
             fieldInitializer.set_constant_velocity_inflow_from_border(wind_direction);
         }
         if (ImGui::Button("Wind Tunnel State")) {

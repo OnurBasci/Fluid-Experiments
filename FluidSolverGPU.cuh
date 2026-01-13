@@ -11,6 +11,22 @@
 
 #define CLAMP(x, a, b) (( (x) < (a) ) ? (a) : ( ((x) > (b)) ? (b) : (x) ))
 
+struct AbsVal
+{
+	__host__ __device__
+		float operator()(float x) const
+	{
+		return fabsf(x);
+	}
+};
+
+struct MagFunctor {
+	__host__ __device__
+		float operator()(const Vec2& v) const {
+		return sqrtf(v.x * v.x + v.y * v.y);
+	}
+};
+
 class FluidSolverGPU {
 public:
 	int ResX;
@@ -35,10 +51,12 @@ public:
 	float* velY;
 	float* velY_temp;
 	Vec2* vel_center;
+	float* vel_magnitude;
 	float* pressure_new;
 	float* pressure_old;
 	float* smoke;
-	Vec2* external_vel; //velocity field containing external forces
+	Vec2* setter_external_vel; //velocity field containing external forces that is set directly to the velocity field
+	Vec2* adder_external_vel; //additional velocity field that is added to the velocity field each frame
 	float* swap_smoke;
 	float* temperature;
 	float* swap_temperature;
@@ -68,7 +86,10 @@ public:
 	void set_smoke_field_on_GPU(const float* s_field);
 	void set_smoke_inflow_map_on_GPU(const unsigned char* s_field);
 	void set_vel_field_on_GPU(const float* velX, const float* velY);
-	void set_external_vel_field_on_GPU(const Vec2* external_vel);
+	void set_setter_external_vel_field_on_GPU(const Vec2* external_vel);
+	void set_adder_external_vel_field_on_GPU(const Vec2* external_vel);
+	void set_divergence_on_GPU(const float* div);
+	void set_pressure_on_GPU(const float* press);
 
 	//solver functions
 	void determine_time_step();

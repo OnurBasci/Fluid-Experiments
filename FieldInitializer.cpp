@@ -5,11 +5,14 @@ FieldInitializer::FieldInitializer(FluidSolverGPU& fluid_solver_gpu): resX(RESXG
 
     velX = (float*)malloc((resX+1)*resY*sizeof(float));
     velY = (float*)malloc(resX*(resY+1)*sizeof(float));
+    divergence = (float*)malloc(resX*resY*sizeof(float));
+    pressure = (float*)malloc(resX*resY*sizeof(float));
     smoke = (float*)malloc(resX*resY*sizeof(float));
 	solid_map = (unsigned char*)malloc((resY + 2) * (resX + 2) * sizeof(char));
 	air_map = (unsigned char*)malloc((resY + 2) * (resX + 2) * sizeof(char));
     smoke_inflow_map = (unsigned char*)malloc(resY*resX * sizeof(char));
-    external_vel = (Vec2*)malloc(resX * resY * sizeof(Vec2));
+    setter_external_vel = (Vec2*)malloc(resX * resY * sizeof(Vec2));
+    adder_external_vel = (Vec2*)malloc(resX * resY * sizeof(Vec2));
 
     set_default_fields();
 }
@@ -29,12 +32,13 @@ void FieldInitializer::set_default_fields(int wind_dir) {
     }
 
     //set resY*resX fields
-    int center = resY / 2;
     for (int i = 0; i < resY; i++) {
         for (int j = 0; j < resX; j++) {
             smoke[i * resX + j] = 0.0;
             smoke_inflow_map[i * resX + j] = false;
-
+            adder_external_vel[i * resX + j] = Vec2(0,0);
+            divergence[i * resX + j] = 0;
+            pressure[i * resX + j] = 0;
         }
     }
 
@@ -59,7 +63,9 @@ void FieldInitializer::set_default_fields(int wind_dir) {
     fluidSolverGPU->set_smoke_field_on_GPU(smoke);
     fluidSolverGPU->set_vel_field_on_GPU(velX, velY);
     fluidSolverGPU->set_smoke_inflow_map_on_GPU(smoke_inflow_map);
-    fluidSolverGPU->set_external_vel_field_on_GPU(external_vel);
+    fluidSolverGPU->set_adder_external_vel_field_on_GPU(adder_external_vel);
+    fluidSolverGPU->set_divergence_on_GPU(divergence);
+    fluidSolverGPU->set_pressure_on_GPU(pressure);
 }
 
 void FieldInitializer::reset_field(int wind_dir) {
@@ -68,7 +74,7 @@ void FieldInitializer::reset_field(int wind_dir) {
 
 void FieldInitializer::set_wind_tunnel() {
     //set constant velocity coming from left
-    set_constant_velocity_inflow_from_border(0);
+    set_constant_velocity_inflow_from_border(1);
 
 
     //set solid blocks
@@ -132,48 +138,46 @@ void FieldInitializer::set_constant_velocity_inflow_from_border(const int border
     for (int i = 0; i < resY; i++) {
         for (int j = 0; j < resX; j++) {
 
-            external_vel[i * resX + j] = Vec2(0, 0);
+            setter_external_vel[i * resX + j] = Vec2(0, 0);
 
             switch (border_index)
             {
             case 0:
-                //wind coming from left
-                external_vel[i * resX + j] = Vec2(0, 0);
-                if (j == 0) {
-                    external_vel[i * resX + j] = Vec2(wind_force, 0);
-                }
                 break;
             case 1:
-                //wind coming from top
-                external_vel[i * resX + j] = Vec2(0, 0);
-                if (i == 0) {
-                    external_vel[i * resX + j] = Vec2(0, -wind_force);
+                //wind coming from left
+                setter_external_vel[i * resX + j] = Vec2(0, 0);
+                if (j == 0) {
+                    setter_external_vel[i * resX + j] = Vec2(wind_force, 0);
                 }
                 break;
             case 2:
-                //wind coming from right
-                if (j == resX-2) {
-                    external_vel[i * resX + j] = Vec2(-wind_force, 0);
+                //wind coming from top
+                setter_external_vel[i * resX + j] = Vec2(0, 0);
+                if (i == 0) {
+                    setter_external_vel[i * resX + j] = Vec2(0, -wind_force);
                 }
                 break;
             case 3:
+                //wind coming from right
+                if (j == resX-2) {
+                    setter_external_vel[i * resX + j] = Vec2(-wind_force, 0);
+                }
+                break;
+            case 4:
                 //wind coming from bottom
                 if (i == resY-2) {
-                    external_vel[i * resX + j] = Vec2(0, wind_force);
+                    setter_external_vel[i * resX + j] = Vec2(0, wind_force);
                 }
                 break;
             default:
-                //wind coming from left
-                if (j == 0) {
-                    external_vel[i * resX + j] = Vec2(wind_force, 0);
-                }
                 break;
             }
 
         }
     }
 
-    fluidSolverGPU->set_external_vel_field_on_GPU(external_vel);
+    fluidSolverGPU->set_setter_external_vel_field_on_GPU(setter_external_vel);
 }
 
 void FieldInitializer::setup_environment_by_mouse_interaction(DrawField draw_field) {
@@ -209,6 +213,46 @@ void FieldInitializer::setup_environment_by_mouse_interaction(DrawField draw_fie
         fluidSolverGPU->set_solid_map_on_GPU(solid_map);
         fluidSolverGPU->set_smoke_field_on_GPU(smoke);
         fluidSolverGPU->set_smoke_inflow_map_on_GPU(smoke_inflow_map);
+    }
+}
+
+void FieldInitializer::add_force_by_mouse_interaction(Vec2& prev_pos) {
+    /*
+    add velocity towards the direction of the mouse
+    */
+    ImGuiIO& io = ImGui::GetIO();
+
+    // If ImGui wants the mouse, do not handle it
+    if (io.WantCaptureMouse)
+        return;
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        ImVec2 mouse_pos = ImGui::GetMousePos();
+        prev_pos = Vec2(mouse_pos.x, mouse_pos.y);
+    }
+    else if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        ImVec2 mouse_pos = ImGui::GetMousePos();
+        Vec2 center_id = convert_screen_pos_to_field_index(Vec2(mouse_pos.x, mouse_pos.y), Vec2(900, 900));
+        std::vector<Vec2> brush_indices = get_brush_indices_from_index(center_id);
+        Vec2 move_dir = Vec2(mouse_pos.x, mouse_pos.y) - prev_pos;
+        move_dir = Vec2(move_dir.x, -move_dir.y);
+
+        for (Vec2 id : brush_indices) {
+            int i = std::clamp(static_cast<int>(id.x), 0, resY-1);
+            int j = std::clamp(static_cast<int>(id.y), 0, resX-1);
+
+            adder_external_vel[i * resX + j] = mouse_force* move_dir;
+        }
+        prev_pos = Vec2(mouse_pos.x, mouse_pos.y);
+        fluidSolverGPU->set_adder_external_vel_field_on_GPU(adder_external_vel);
+    }
+    else if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        for (int i = 0; i < resY; i++) {
+            for (int j = 0; j < resX; j++) {
+                adder_external_vel[i * resX + j] = Vec2(0, 0);
+            }
+        }
+        fluidSolverGPU->set_adder_external_vel_field_on_GPU(adder_external_vel);
     }
 }
 
@@ -253,7 +297,10 @@ FieldInitializer::~FieldInitializer() {
     free(velY);
     free(smoke);
 	free(solid_map);
+    free(divergence);
+    free(pressure);
     free(air_map);
     free(smoke_inflow_map);
-    free(external_vel);
+    free(setter_external_vel);
+    free(adder_external_vel);
 }
