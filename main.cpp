@@ -214,6 +214,7 @@ int main()
         ImGui::RadioButton("Pressure", &show_field_index, 1);
         ImGui::RadioButton("Divergence", &show_field_index, 2);
         ImGui::RadioButton("Vel_Mag", &show_field_index, 3);
+        ImGui::RadioButton("vorticity", &show_field_index, 4);
         //Set Drawing Field
         ImGui::Text("Draw Field");
         ImGui::Checkbox("add constant flow", &fieldInitializer.add_constant_inflow);

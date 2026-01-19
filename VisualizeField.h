@@ -6,8 +6,8 @@ enum class VisualizeField {
 	Pressure,
 	Divergence,
 	VelocityMagnitude,
-	Temperature,
-	Vorticity
+	Vorticity,
+	Temperature
 };
 
 #endif

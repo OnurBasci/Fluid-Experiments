@@ -66,6 +66,7 @@ public:
 	float* temperature;
 	float* swap_temperature;
 	float* divergence;
+	float* vorticity;
 	float* scene_bytes; //bytes to render at each frame
 	unsigned char* solid_map;
 	unsigned char* air_map;
@@ -110,6 +111,7 @@ public:
 	//visualization
 	void set_host_field();
 	void construct_velocity_center();
+	void compute_vorticity();
 	std::vector<unsigned char> scalar_field_to_bytes(float normalize_factor);
 	std::vector<unsigned char> vector_field_to_bytes();
 	void apply_red_blue_map(const float val, float& r, float& g, float& b);

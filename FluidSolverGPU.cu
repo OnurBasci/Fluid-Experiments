@@ -42,27 +42,26 @@ void compute_divergence_kernel(float* divergence, float* velX, float* velY, int 
 }
 
 __global__
-void initialize_smoke_field(float* smoke, int resX, int resY) {
+void compute_vorticity_kernel(float* vorticity, Vec2* vel, int resX, int resY, float dx) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
     int num_cells = resX * resY;
     if (idx >= num_cells) return;
 
-    int i = idx / resX; 
+    int i = idx / resX;
     int j = idx % resX;
 
-    // Center of the domain (in indices)
-    float cx = (resY - 1) * 0.5f;
-    float cy = (resX - 1) * 0.5f;
-    float radius = 0.2*resX;
-    float r2 = radius * radius;
+    // boundary: set to 0 (or copy later)
+    if (i == 0 || i == resY - 1 || j == 0 || j == resX - 1) {
+        vorticity[idx] = 0.0f;
+        return;
+    }
 
-    float dx = (float)i - cx;
-    float dy = (float)j - cy;
+    // omega = dv/dx - du/dy
+    float dv_dx = (vel[i * resX + (j + 1)].y - vel[i * resX + (j - 1)].y) * (0.5f / dx);
+    float du_dy = (vel[(i + 1) * resX + j].x - vel[(i - 1) * resX + j].x) * (0.5f / dx);
 
-    float dist2 = dx * dx + dy * dy;
-
-    smoke[i * resX + j] = (dist2 < r2) ? 1.0f : 0.0f;
+    vorticity[idx] = dv_dx - du_dy;
 }
 
 __global__
@@ -263,6 +262,40 @@ void add_external_force_wind_tunel_kernel(float* velX, int resX, int resY, float
     if (j == 8 && i >= 0 * center && i < resY) {
         velX[i * resX_1 + j] = wind_force;
     }
+}
+
+__global__
+void add_vorticity_confinement_kernel(float* velX, float* velY, float* vort, int resX, int resY, float dx, float dt, float v_coef) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    int num_cells = resX * resY;
+    if (idx >= num_cells) return;
+
+    int i = idx / resX;
+    int j = idx % resX;
+
+    // boundary add no force
+    if (i == 0 || i >= resY - 1 || j == 0 || j >= resX - 1) return;
+
+    //compute for velY
+    Vec2 up_pos(j+0.5, i);
+    float gx = abs(sample_scalar_field(vort, Vec2(up_pos.x+0.5, i), resX, resY)) - abs(sample_scalar_field(vort, Vec2(up_pos.x-0.5, i), resX, resY));
+    Vec2 grad_up(gx/dx ,(abs(vort[(i-1) * resX + j]) - abs(vort[i * resX + j]))/dx);
+    Vec2 g_norm = grad_up / (grad_up.length() + 1e-6);
+
+    float w = sample_scalar_field(vort, up_pos, resX, resY);
+    float f_y = -v_coef * dx * w * g_norm.x;
+    velY[i * resX + j] += f_y * dt;
+
+    //compute for velX
+    Vec2 left_pos(j, i+0.5);
+    float gy = abs(sample_scalar_field(vort, Vec2(j, left_pos.y-0.5), resX, resY)) - abs(sample_scalar_field(vort, Vec2(j, left_pos.y+0.5), resX, resY));
+    Vec2 grad_left((abs(vort[i*resX + j]) - abs(vort[i*resX+j-1])) / dx, gy/dx);
+    g_norm = grad_left / (grad_left.length() + 1e-6);
+
+    w = sample_scalar_field(vort, left_pos, resX, resY);
+    float f_x = v_coef * dx * w * g_norm.y;
+    velX[i * (resX + 1) + j] += f_x * dt;
 }
 
 __global__
@@ -533,6 +566,7 @@ FluidSolverGPU::FluidSolverGPU() : ResX(RESXGPU), ResY(RESYGPU), num_cells(ResX*
     CUDA_CHECK(cudaMalloc(&color_inflow, (ResY*ResX) * sizeof(Vec3)));
     CUDA_CHECK(cudaMalloc(&swap_smoke, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&temperature, (ResY * ResX) * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&vorticity, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&swap_temperature, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&divergence, (ResY * ResX) * sizeof(float)));
     CUDA_CHECK(cudaMallocManaged(&air_map, (ResY+2)*(ResX+2) * sizeof(char)));
@@ -629,6 +663,12 @@ void FluidSolverGPU::construct_velocity_center() {
     construct_vel_center_kernel <<< grid_size, block_size >>> (vel_center, velX, velY, ResX, ResY);
 }
 
+void FluidSolverGPU::compute_vorticity() {
+    int grid_size = (num_cells + block_size - 1) / block_size;
+
+    compute_vorticity_kernel <<<grid_size, block_size >>> (vorticity, vel_center, ResX, ResY, dx);
+}
+
 void FluidSolverGPU::compute_divergence() {
     int grid_size = (num_cells + block_size - 1) / block_size;
 
@@ -649,6 +689,7 @@ void FluidSolverGPU::solve_smoke() {
 
     compute_divergence();
     construct_velocity_center();
+    compute_vorticity();
 }
 
 //SIMULATION FUNCTIONS
@@ -732,6 +773,8 @@ void FluidSolverGPU::add_external_force() {
     number_of_cells = ResX * ResY;
     grid_size = (number_of_cells + block_size - 1) / block_size;
     add_external_force_kernel <<<grid_size, block_size>>>(velX, velY, adder_external_vel, setter_external_vel, ResX, ResY, dx, dt);
+
+    add_vorticity_confinement_kernel <<<grid_size, block_size>>> (velX, velY, vorticity, ResX, ResY, dx, dt, 20.0);
 }
 
 void FluidSolverGPU::project() {
@@ -776,6 +819,9 @@ void FluidSolverGPU::set_host_field() {
             MagFunctor{}
         );
         CUDA_CHECK(cudaMemcpy(host_field, vel_magnitude, host_field_size, cudaMemcpyDeviceToHost));
+        break;
+    case VisualizeField::Vorticity:
+        CUDA_CHECK(cudaMemcpy(host_field, vorticity, host_field_size, cudaMemcpyDeviceToHost));
         break;
     default:
         CUDA_CHECK(cudaMemcpy(host_field, smoke, host_field_size, cudaMemcpyDeviceToHost));
@@ -980,6 +1026,7 @@ FluidSolverGPU::~FluidSolverGPU() {
     CUDA_CHECK(cudaFree(color));
     CUDA_CHECK(cudaFree(swap_color));
     CUDA_CHECK(cudaFree(color_inflow));
+    CUDA_CHECK(cudaFree(vorticity));
 
     free(host_field);
     free(host_vector_field);
