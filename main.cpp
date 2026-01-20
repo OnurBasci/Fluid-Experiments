@@ -114,6 +114,7 @@ int main()
     int wind_direction = 0;
     Vec2 prev_mouse_pos(0,0);
     float smoke_color[3] = { 1.0f, 1.0f, 1.0f };
+    float vorticity_coefficient = 10.0;
 
     //initialize field
     FieldInitializer fieldInitializer(fluid_solverGPU);
@@ -207,7 +208,7 @@ int main()
 
         //create a UI window
         ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Simulation Parameters");
+        ImGui::Begin("Environment Parameters");
         //Set Visualization Field
         ImGui::Text("Visualization field");
         ImGui::RadioButton("Smoke##show", &show_field_index, 0);
@@ -255,6 +256,11 @@ int main()
             fieldInitializer.reset_field(wind_direction);
             simulation_started = false;
         }
+        ImGui::Text("Simulation Parameters");
+        if (ImGui::SliderFloat("vort coeff", &vorticity_coefficient, 0, 50)) {
+            fluid_solverGPU.vorticity_coeff = vorticity_coefficient;
+        }
+
         ImGui::End();
 
         //render UI

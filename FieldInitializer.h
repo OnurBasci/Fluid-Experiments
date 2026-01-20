@@ -25,6 +25,7 @@ public:
 	float* velX;
 	float* velY;
 	float* smoke;
+	float* vorticity;
 	Vec3* color;
 	Vec3* color_inflow;
 

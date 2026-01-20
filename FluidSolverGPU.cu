@@ -58,8 +58,8 @@ void compute_vorticity_kernel(float* vorticity, Vec2* vel, int resX, int resY, f
     }
 
     // omega = dv/dx - du/dy
-    float dv_dx = (vel[i * resX + (j + 1)].y - vel[i * resX + (j - 1)].y) * (0.5f / dx);
-    float du_dy = (vel[(i + 1) * resX + j].x - vel[(i - 1) * resX + j].x) * (0.5f / dx);
+    float dv_dx = (vel[i * resX + (j + 1)].y - vel[i * resX + (j - 1)].y)/(2*dx);
+    float du_dy = (vel[(i - 1) * resX + j].x - vel[(i + 1) * resX + j].x)/(2*dx);
 
     vorticity[idx] = dv_dx - du_dy;
 }
@@ -625,6 +625,11 @@ void FluidSolverGPU::set_divergence_on_GPU(const float* div) {
     CUDA_CHECK(cudaMemcpy(divergence, div, map_size, cudaMemcpyHostToDevice));
 }
 
+void FluidSolverGPU::set_vorticity_on_GPU(const float* vort) {
+    size_t map_size = (ResX) * (ResY) * sizeof(float);
+    CUDA_CHECK(cudaMemcpy(vorticity, vort, map_size, cudaMemcpyHostToDevice));
+}
+
 void FluidSolverGPU::set_pressure_on_GPU(const float* press) {
     size_t map_size = (ResX) * (ResY) * sizeof(float);
     CUDA_CHECK(cudaMemcpy(pressure_new, press, map_size, cudaMemcpyHostToDevice));
@@ -774,7 +779,7 @@ void FluidSolverGPU::add_external_force() {
     grid_size = (number_of_cells + block_size - 1) / block_size;
     add_external_force_kernel <<<grid_size, block_size>>>(velX, velY, adder_external_vel, setter_external_vel, ResX, ResY, dx, dt);
 
-    add_vorticity_confinement_kernel <<<grid_size, block_size>>> (velX, velY, vorticity, ResX, ResY, dx, dt, 20.0);
+    add_vorticity_confinement_kernel <<<grid_size, block_size>>> (velX, velY, vorticity, ResX, ResY, dx, dt, vorticity_coeff);
 }
 
 void FluidSolverGPU::project() {

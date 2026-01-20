@@ -45,6 +45,7 @@ public:
 	float T_incoming = 70.0;
 	float wind_force = 4.0;
 	float diffus_factor = 0.00001;
+	float vorticity_coeff = 10;
 	int jacobi_iteration = 100;
 
 	//fields
@@ -98,6 +99,7 @@ public:
 	void set_pressure_on_GPU(const float* press);
 	void set_color_field_on_GPU(const Vec3* color);
 	void set_color_inflow_on_GPU(const Vec3* color_inflow);
+	void set_vorticity_on_GPU(const float* vort);
 
 	//solver functions
 	void determine_time_step();

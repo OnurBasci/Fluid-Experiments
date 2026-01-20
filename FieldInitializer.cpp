@@ -15,6 +15,7 @@ FieldInitializer::FieldInitializer(FluidSolverGPU& fluid_solver_gpu): resX(RESXG
     smoke_inflow_map = (unsigned char*)malloc(resY*resX * sizeof(char));
     setter_external_vel = (Vec2*)malloc(resX * resY * sizeof(Vec2));
     adder_external_vel = (Vec2*)malloc(resX * resY * sizeof(Vec2));
+    vorticity = (float*)malloc(resX * resY * sizeof(float));
 
     set_default_fields();
 }
@@ -43,6 +44,7 @@ void FieldInitializer::set_default_fields(int wind_dir) {
             pressure[i * resX + j] = 0;
             color[i * resX + j] = Vec3(0.0,0.0,0.0);
             color_inflow[i * resX + j] = Vec3(0.0,0.0,0.0);
+            vorticity[i * resX + j] = 0;
         }
     }
 
@@ -72,6 +74,7 @@ void FieldInitializer::set_default_fields(int wind_dir) {
     fluidSolverGPU->set_pressure_on_GPU(pressure);
     fluidSolverGPU->set_color_field_on_GPU(color);
     fluidSolverGPU->set_color_inflow_on_GPU(color_inflow);
+    fluidSolverGPU->set_vorticity_on_GPU(vorticity);
 }
 
 void FieldInitializer::reset_field(int wind_dir) {
@@ -315,4 +318,5 @@ FieldInitializer::~FieldInitializer() {
     free(adder_external_vel);
     free(color);
     free(color_inflow);
+    free(vorticity);
 }
