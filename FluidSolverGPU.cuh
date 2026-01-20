@@ -10,6 +10,8 @@
 #include "FluidConfig.h"
 #include "CudaConfig.h"
 
+#include <iostream>
+
 #define CLAMP(x, a, b) (( (x) < (a) ) ? (a) : ( ((x) > (b)) ? (b) : (x) ))
 
 struct AbsVal
@@ -32,6 +34,8 @@ class FluidSolverGPU {
 public:
 	int ResX;
 	int ResY;
+	int frame_counter = 0;
+	double simulation_time = 0.0;
 
 	//parameters
 	float dt=0.0005;
@@ -46,7 +50,8 @@ public:
 	float wind_force = 4.0;
 	float diffus_factor = 0.00001;
 	float vorticity_coeff = 10;
-	int jacobi_iteration = 100;
+	int pressure_solver_iteration = 100;
+	int presure_solver_id = 0; //0: jacobi, 1: black red chessboard gauss seidel
 
 	//fields
 	float* velX;

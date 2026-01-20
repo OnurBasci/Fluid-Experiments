@@ -156,10 +156,6 @@ int main()
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-
-        //check the solver loop time
-        auto start = std::chrono::high_resolution_clock::now();
-
         //solver loop
         if (simulation_started) {
             if (use_gpu) {
@@ -179,17 +175,9 @@ int main()
             fieldInitializer.setup_environment_by_mouse_interaction(static_cast<DrawField>(draw_field_index), Vec3(smoke_color[0], smoke_color[1], smoke_color[2]));
         }
 
-        auto end = std::chrono::high_resolution_clock::now();
-        double ms = std::chrono::duration<double, std::milli>(end - start).count();
-
-        static double sumMs = 0.0;
-        static int frameCount = 0;
-        sumMs += ms;
-        frameCount++;
-        if (frameCount == 100) {
-            std::cout << "Avg CPU time: " << (sumMs / frameCount) << " ms\n";
-            sumMs = 0.0;
-            frameCount = 0;
+        //print the average ms per frame every 100 frames
+        if (fluid_solverGPU.frame_counter % 100 == 0 && fluid_solverGPU.frame_counter > 0) {
+            std::cout << "Avg simulation time: " << (fluid_solverGPU.simulation_time / fluid_solverGPU.frame_counter) << " ms\n";
         }
 
         // render fluid
@@ -254,13 +242,18 @@ int main()
         }
         if (ImGui::Button("Restart Simulation")) {
             fieldInitializer.reset_field(wind_direction);
+            fluid_solverGPU.frame_counter = 0;
+            fluid_solverGPU.simulation_time = 0.0;
             simulation_started = false;
         }
         ImGui::Text("Simulation Parameters");
         if (ImGui::SliderFloat("vort coeff", &vorticity_coefficient, 0, 50)) {
             fluid_solverGPU.vorticity_coeff = vorticity_coefficient;
         }
-
+        ImGui::RadioButton("Jacobi Solver", &fluid_solverGPU.presure_solver_id, 0);
+        ImGui::SameLine();
+        ImGui::RadioButton("Gauss Seidel Solver", &fluid_solverGPU.presure_solver_id, 1);
+        
         ImGui::End();
 
         //render UI

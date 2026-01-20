@@ -9,7 +9,6 @@ Vec2 sample_vec2_field(Vec2* field, Vec2 pos, int resX, int resY);
 Vec3 sample_vec3_field(Vec3* field, Vec2 pos, int resX, int resY);
 
 //KERNELS
-
 __global__
 void construct_vel_center_kernel(Vec2* vel_center, float* velX, float* velY, int resX, int resY) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
@@ -38,7 +37,24 @@ void compute_divergence_kernel(float* divergence, float* velX, float* velY, int 
     int i = idx / resX;
     int j = idx % resX;
 
+    divergence[i * resX + j] = ((velX[i * resX_1 + j + 1] - velX[i * resX_1 + j]) + (velY[i * resX + j] - velY[(i + 1) * resX + j])) / dx;
+}
+
+__global__
+void compute_divergence_and_sum_kernel(float* divergence, float* velX, float* velY, int resX, int resY, float dx, float* divergence_sum) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    int num_cells = resX * resY;
+    if (idx >= num_cells) return;
+
+    int resX_1 = resX + 1;
+
+    int i = idx / resX;
+    int j = idx % resX;
+
     divergence[i*resX+j] = ((velX[i*resX_1+j + 1] - velX[i*resX_1+j]) + (velY[i*resX+j] - velY[(i + 1)*resX+j])) / dx;
+
+    atomicAdd(divergence_sum, divergence[i * resX + j]);
 }
 
 __global__
@@ -192,6 +208,7 @@ void diffuse_scalar_field_kernel(float* field, float* swap_field, unsigned char*
     swap_field[i * resX + j] = diffused;
 }
 
+//ADVECTION KERNELS
 __global__
 void advect_vec3_kernel(Vec3* field, Vec3* swap_field, Vec2* vel, int resX, int resY, float dt) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
@@ -228,6 +245,7 @@ void advect_quantity_kernel(float* field, float* swap_field, Vec2* vel, int resX
     swap_field[i * resX + j] = sample_val;
 }
 
+//EXTERNAL FORCE KERNELS
 __global__
 void add_external_force_smoke_kernel(float* velY, float* smoke, float* temperature, int resX, int resY, float gravity, float dt, float d_a, float b, float T_amb) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
@@ -326,8 +344,9 @@ void add_external_force_kernel(float* velX, float* velY, Vec2* adder_external_ve
         velY[i * resX + j] = sampled_up_setter.y;
 }
 
+//PRESSURE SOLVE KERNLES
 __global__
-void jacobi_pressure_solve(float* pressure_new, float* pressure_old, float* velX, float* velY, unsigned char* solid_map, unsigned char * air_map, int resY, int resX, float density, float dx, float dt) {
+void jacobi_pressure_solve(float* pressure_new, float* pressure_old, float* velX, float* velY, unsigned char* solid_map, unsigned char * air_map, int resX, int resY, float density, float dx, float dt) {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
     int num_cells = resX * (resY);
@@ -354,9 +373,43 @@ void jacobi_pressure_solve(float* pressure_new, float* pressure_old, float* velX
 
     float pressure_part = (pr + pl + pt + pb);
     float div_part = -density * dx * (((!sr)*velX[i*resX_1 + j+1] - (!sl)*velX[i*resX_1 + j]) + ((!st)*velY[i*resX + j] - (!sb)*velY[(i + 1)*resX+j])) / dt;
-    //overrelaxation
     float p_new = (pressure_part + div_part) / free_neigh;
     pressure_new[i * resX + j] = p_new;
+}
+
+__global__
+void red_black_pressure_solve(float* pressure, bool iter_black, float* velX, float *velY, unsigned char* solid_map, unsigned char* air_map, int resX, int resY, float density, float dx, float dt) {
+    //update half of the grid. Works on the current pressure values, resX and resY should be even
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    int num_cells = (resX * resY)/2;
+    if (idx >= num_cells) return;
+    int resX_1 = resX + 1;
+
+    //get the checkboard pattern index
+    int i = idx / (resX/2);
+    bool odd_row = i % 2;
+    int j = 2 * (idx % (resX / 2));
+    j += (odd_row && iter_black); //if blacks turn and odd row add 1
+    j += (!odd_row && !iter_black); //if red turn and even row add 1
+
+    if (solid_map[(i + 1) * (resX + 2) + (j + 1)]) return;
+
+    //solve for pressure
+    unsigned char st = solid_map[i * (resX + 2) + j + 1]; unsigned char sb = solid_map[(i + 2) * (resX + 2) + j + 1]; unsigned char sl = solid_map[(i + 1) * (resX + 2) + j]; unsigned char sr = solid_map[(i + 1) * (resX + 2) + j + 2];
+    unsigned char at = air_map[i * (resX + 2) + j + 1]; unsigned char ab = air_map[(i + 2) * (resX + 2) + j + 1]; unsigned char al = air_map[(i + 1) * (resX + 2) + j]; unsigned char ar = air_map[(i + 1) * (resX + 2) + j + 2];
+    int sum_occ = st + sb + sl + sr;
+    unsigned char free_neigh = 4 - sum_occ;
+
+    //the pressure is 0 if solid or air cell
+    float pt = st || at ? 0.0 : pressure[(i - 1) * resX + j];
+    float pr = sr || ar ? 0.0 : pressure[i * resX + j + 1];
+    float pb = sb || ab ? 0.0 : pressure[(i + 1) * resX + j];
+    float pl = sl || al ? 0.0 : pressure[i * resX + j - 1];
+
+    float pressure_part = (pr + pl + pt + pb);
+    float div_part = -density * dx * (((!sr) * velX[i * resX_1 + j + 1] - (!sl) * velX[i * resX_1 + j]) + ((!st) * velY[i * resX + j] - (!sb) * velY[(i + 1) * resX + j])) / dt;
+    pressure[i * resX + j] = (pressure_part + div_part) / free_neigh;;
 }
 
 __global__
@@ -676,12 +729,23 @@ void FluidSolverGPU::compute_vorticity() {
 
 void FluidSolverGPU::compute_divergence() {
     int grid_size = (num_cells + block_size - 1) / block_size;
+    compute_divergence_kernel << <grid_size, block_size >> > (divergence, velX, velY, ResX, ResY, dx);
 
-    compute_divergence_kernel<<<grid_size, block_size>>>(divergence, velX, velY, ResX, ResY, dx);
+    /*float* div_sum;
+    cudaMallocManaged(&div_sum, sizeof(float));
+    cudaMemset(div_sum, 0, sizeof(float));
+    compute_divergence_and_sum_kernel<<<grid_size, block_size>>>(divergence, velX, velY, ResX, ResY, dx, div_sum);
+    cudaDeviceSynchronize();
+    if (abs(*div_sum) < 50) {
+        printf("threshold passed, div %f, frame %d time: %f\n", *div_sum, frame_counter, simulation_time);
+    }
+    cudaFree(div_sum);*/
 }
 
 //Solver Functions
 void FluidSolverGPU::solve_smoke() {
+    auto start = std::chrono::high_resolution_clock::now();
+
     //add_temperature_inflow();
     add_smoke_inflow();
 
@@ -695,6 +759,13 @@ void FluidSolverGPU::solve_smoke() {
     compute_divergence();
     construct_velocity_center();
     compute_vorticity();
+
+    //update frame and time
+    cudaDeviceSynchronize();
+    frame_counter++;
+    auto end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - start).count();
+    simulation_time += ms;
 }
 
 //SIMULATION FUNCTIONS
@@ -784,18 +855,30 @@ void FluidSolverGPU::add_external_force() {
 
 void FluidSolverGPU::project() {
     //solve pressure with jacobi iteration
-    int number_of_cells = ResX * ResY;
-    int grid_size = (number_of_cells + block_size - 1) / block_size;
-    for (int i = 0; i < jacobi_iteration; i++) {
-        jacobi_pressure_solve<<<grid_size, block_size>>>(pressure_new, pressure_old, velX, velY, solid_map, air_map, ResX, ResY, density, dx, dt);
-        if (i < jacobi_iteration-1) {
-            std::swap(pressure_new, pressure_old);
+    if (presure_solver_id == 0) {
+        int number_of_cells = ResX * ResY;
+        int grid_size = (number_of_cells + block_size - 1) / block_size;
+        for (int i = 0; i < pressure_solver_iteration; i++) {
+            jacobi_pressure_solve << <grid_size, block_size >> > (pressure_new, pressure_old, velX, velY, solid_map, air_map, ResX, ResY, density, dx, dt);
+            if (i < pressure_solver_iteration - 1) {
+                std::swap(pressure_new, pressure_old);
+            }
+        }
+    }
+
+    //Solve pressure with black and red checkboard grid
+    if (presure_solver_id == 1) {
+        int number_of_cells = (ResX * ResY) / 2; //we suppose ResX and ResY are even
+        int grid_size = (number_of_cells + block_size - 1) / block_size;
+        for (int i = 0; i < pressure_solver_iteration; i++) {
+            bool iter_black = i % 2;
+            red_black_pressure_solve <<<grid_size, block_size >> > (pressure_new, iter_black, velX, velY, solid_map, air_map, ResX, ResY, density, dx, dt);
         }
     }
 
     //make velocity incompressible
-    number_of_cells = (ResX + 1) * ResY;
-    grid_size = (number_of_cells + block_size - 1) / block_size;
+    int number_of_cells = (ResX + 1) * ResY;
+    int grid_size = (number_of_cells + block_size - 1) / block_size;
     make_velX_incompressible <<<grid_size, block_size >>> (velX, pressure_new, solid_map, air_map, ResX, ResY, dx, dt, density);
     make_velY_incompressible <<<grid_size, block_size>>> (velY, pressure_new, solid_map, air_map, ResX, ResY, dx, dt, density);
 }
