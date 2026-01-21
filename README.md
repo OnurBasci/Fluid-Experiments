@@ -10,12 +10,16 @@ vcpkg
 Ninja
 
 ## Configuration
+Install glfw3 and glad
 ```
 .\vcpkg install glfw3:x64-windows
-.\vcpkg install glfw3:x64-windows
+.\vcpkg install glad:x64-windows
 ```
 
+Configure and build the project.
 ```
 cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=<VCPKG_ROOT>/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows 
 cmake --build build
 ```
+
+This will generate a .exe file in the build directory.
