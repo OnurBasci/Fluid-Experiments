@@ -18,7 +18,7 @@ Install glfw3 and glad
 
 Configure and build the project.
 ```
-cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=<VCPKG_ROOT>/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows 
+cmake -S . -B build -G -DCMAKE_TOOLCHAIN_FILE=<VCPKG_ROOT>/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows 
 cmake --build build
 ```
 
