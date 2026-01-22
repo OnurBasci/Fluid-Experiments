@@ -9,9 +9,11 @@ The solver is written in CUDA and is highly parallelized to achieve real-time si
 
 The solver is highly interactive. Users can define the initial state by drawing solid boundaries and smoke densities in different colors. Users can also apply forces to the fluid to influence its trajectory. The behavior of the fluid can be further controlled through various simulation parameters.
 
-![](images/fluid_collapse.png)
-![](images/narrow_passage.png)
-![](images/wind_tunnel.png)
+<p>
+  <img src="images/fluid_collapse.png" width="30%" />
+  <img src="images/narrow_passage.png" width="30%" />
+  <img src="images/wind_tunnel.png" width="30%" />
+</p>
 
 
 ## Requirements
